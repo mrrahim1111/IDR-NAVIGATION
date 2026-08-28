@@ -63,6 +63,9 @@ interface NavContextValue extends NavigationState {
   restoreGNSS: () => void;
   resetSimulation: () => void;
   toggleAutoBlackout: () => void;
+  // Route selection variants
+  toggleRouteVariant: () => void;
+  speakAssistantMessage: (text: string) => void;
 }
 
 const NavigationContext = createContext<NavContextValue | null>(null);
@@ -79,6 +82,7 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
   const [isNavigating, setIsNavigating] = useState(true);
   const [isPaused, setIsPaused] = useState(false);
   const [autoBlackoutEnabled, setAutoBlackoutEnabled] = useState(true);
+  const [useAlternativeRoute, setUseAlternativeRoute] = useState(false);
 
   const [gnssStatus, setGnssStatus] = useState<GNSSStatus>('healthy');
   const [navigationMode, setNavigationMode] = useState<NavigationMode>('GNSS + INS Fusion');
@@ -110,10 +114,22 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
   const driftAccumulatorRef = useRef(0);
   const recoveryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Text to Speech Helper using Web Speech API
+  const speakAssistantMessage = useCallback((text: string) => {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel(); // Cancel any ongoing speech
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = 0.95;
+      utterance.pitch = 1.0;
+      window.speechSynthesis.speak(utterance);
+    }
+  }, []);
+
   // Switch Route Function
   const selectRoute = useCallback((routeId: string) => {
     const route = PRESET_ROUTES.find((r) => r.id === routeId) || VIJAYAWADA_ROUTE;
     setActiveRoute(route);
+    setUseAlternativeRoute(false); // Reset to shortest path
     setRouteIndex(0);
     setPosition(route.waypoints[0]);
     setGnssTrajectory([route.waypoints[0]]);
@@ -133,6 +149,33 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
     setIsPaused(false);
     setIsNavigating(true);
   }, []);
+
+  // Toggle variant
+  const toggleRouteVariant = useCallback(() => {
+    setUseAlternativeRoute((prev) => {
+      const nextVal = !prev;
+      const waypoints = nextVal ? activeRoute.alternative.waypoints : activeRoute.waypoints;
+      
+      setRouteIndex(0);
+      setPosition(waypoints[0]);
+      setGnssTrajectory([waypoints[0]]);
+      setDrTrajectory([]);
+      setBlackoutSegment([]);
+      setIsBlackout(false);
+      setGnssStatus('healthy');
+      setNavigationMode('GNSS + INS Fusion');
+      setDrift(0);
+      setDriftPercentage(0);
+      setBlackoutDistance(0);
+      blackoutDistRef.current = 0;
+      driftAccumulatorRef.current = 0;
+      setCurrentManeuver(activeRoute.maneuvers[0]);
+      setRemainingDistanceMeters((nextVal ? activeRoute.alternative.distanceKm : activeRoute.distanceKm) * 1000);
+      setSystemMessage(`Switched to ${nextVal ? 'Bypass' : 'Shortest'} Route Corridor.`);
+      
+      return nextVal;
+    });
+  }, [activeRoute]);
 
   const simulateBlackout = useCallback(() => {
     setIsBlackout(true);
@@ -180,7 +223,7 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
 
     const interval = setInterval(() => {
       setRouteIndex((prev) => {
-        const waypoints = activeRoute.waypoints;
+        const waypoints = useAlternativeRoute ? activeRoute.alternative.waypoints : activeRoute.waypoints;
         const next = prev < waypoints.length - 1 ? prev + 1 : 0;
         const from = waypoints[prev];
         const to = waypoints[next];
@@ -190,7 +233,9 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
         setHeading(newHeading);
         setHeadingLabel(getHeadingLabel(newHeading));
         setPosition(to);
-        setSpeed(Math.max(25, Math.min(activeRoute.speedLimitKmh, 40 + Math.random() * 20)));
+        
+        const maxSpeed = useAlternativeRoute ? activeRoute.speedLimitKmh - 10 : activeRoute.speedLimitKmh;
+        setSpeed(Math.max(25, Math.min(maxSpeed, 40 + Math.random() * 20)));
 
         // Calculate remaining trip distance
         let remDist = 0;
@@ -199,16 +244,17 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
         }
         setRemainingDistanceMeters(Math.round(remDist));
 
-        // Find applicable maneuver
-        const nextManeuver = [...activeRoute.maneuvers]
-          .reverse()
-          .find((m) => next >= m.stepIndex) || activeRoute.maneuvers[0];
+        // Find applicable maneuver (ignore indices for alternative/bypass route to keep simple straight guidance)
+        const nextManeuver = useAlternativeRoute 
+          ? { stepIndex: 0, instruction: `Proceed via ${activeRoute.alternative.name}`, roadName: activeRoute.alternative.name, direction: 'straight' as const, distanceMeters: remDist }
+          : ([...activeRoute.maneuvers].reverse().find((m) => next >= m.stepIndex) || activeRoute.maneuvers[0]);
+          
         setCurrentManeuver(nextManeuver);
 
-        // Check if inside any BlackoutZone
-        const matchingZone = activeRoute.blackoutZones.find(
-          (z) => next >= z.startIndex && next <= z.endIndex
-        );
+        // Check if inside any BlackoutZone (only on main shortest route with blackout sections)
+        const matchingZone = !useAlternativeRoute 
+          ? activeRoute.blackoutZones.find((z) => next >= z.startIndex && next <= z.endIndex)
+          : undefined;
 
         if (autoBlackoutEnabled) {
           if (matchingZone && !isBlackout && gnssStatus === 'healthy') {
@@ -276,7 +322,7 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
     }, 750);
 
     return () => clearInterval(interval);
-  }, [isNavigating, isPaused, activeRoute, isBlackout, gnssStatus, autoBlackoutEnabled, restoreGNSS]);
+  }, [isNavigating, isPaused, activeRoute, isBlackout, gnssStatus, autoBlackoutEnabled, restoreGNSS, useAlternativeRoute]);
 
   const startNavigation = useCallback(() => {
     setIsNavigating(true);
@@ -337,6 +383,7 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
     activeBlackoutZone,
     autoBlackoutEnabled,
     availableRoutes: PRESET_ROUTES,
+    useAlternativeRoute,
     selectRoute,
     startNavigation,
     pauseNavigation,
@@ -346,6 +393,8 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
     restoreGNSS,
     resetSimulation,
     toggleAutoBlackout,
+    toggleRouteVariant,
+    speakAssistantMessage,
   };
 
   return <NavigationContext.Provider value={value}>{children}</NavigationContext.Provider>;

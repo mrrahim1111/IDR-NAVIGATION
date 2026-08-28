@@ -4,19 +4,15 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import {
   Crosshair,
-  Navigation,
   Gauge,
   Compass,
-  MapPin,
   Route as RouteIcon,
   ShieldAlert,
-  Layers,
-  ChevronRight,
-  Info,
 } from 'lucide-react';
 import { useNavigation } from '../context/NavigationContext';
 import TurnByTurnHUD from '../components/TurnByTurnHUD';
 import RoutePlanner from '../components/RoutePlanner';
+import SmartAssistant from '../components/SmartAssistant';
 
 // Helper to center and fit bounds when route changes
 function RouteMapController({ center, zoom }: { center: [number, number]; zoom: number }) {
@@ -112,7 +108,7 @@ function MapLegend() {
         <span className="text-govt-text font-semibold text-govt-red">GNSS Blackout Zone / Tunnel</span>
       </div>
       <div className="flex items-center gap-2">
-        <span className="w-5 h-1 bg-gray-400/60 inline-block rounded" />
+        <span className="w-5 h-1 bg-gray-400/65 inline-block rounded" />
         <span className="text-govt-muted">Planned Road Corridor</span>
       </div>
     </div>
@@ -159,24 +155,32 @@ export default function Dashboard() {
     blackoutSegment,
     activeRoute,
     activeBlackoutZone,
-    remainingDistanceMeters,
+    useAlternativeRoute,
   } = useNavigation();
 
   const [isRoutePlannerOpen, setIsRoutePlannerOpen] = useState(false);
 
-  const plannedCoords = activeRoute.waypoints.map((p) => [p.lat, p.lng] as [number, number]);
+  // Select path points based on variant
+  const plannedCoords = useMemo(() => {
+    const pts = useAlternativeRoute ? activeRoute.alternative.waypoints : activeRoute.waypoints;
+    return pts.map((p) => [p.lat, p.lng] as [number, number]);
+  }, [activeRoute, useAlternativeRoute]);
+
   const gnssCoords = gnssTrajectory.map((p) => [p.lat, p.lng] as [number, number]);
   const drCoords = drTrajectory.map((p) => [p.lat, p.lng] as [number, number]);
   const blackoutCoords = blackoutSegment.map((p) => [p.lat, p.lng] as [number, number]);
 
-  // Extract blackout zone polylines for visualization
-  const tunnelSegments = activeRoute.blackoutZones.map((z) => {
-    const pts = activeRoute.waypoints.slice(z.startIndex, z.endIndex + 1);
-    return {
-      zone: z,
-      coords: pts.map((p) => [p.lat, p.lng] as [number, number]),
-    };
-  });
+  // Extract blackout zone polylines for visualization (only if using main route containing blackouts)
+  const tunnelSegments = useMemo(() => {
+    if (useAlternativeRoute) return [];
+    return activeRoute.blackoutZones.map((z) => {
+      const pts = activeRoute.waypoints.slice(z.startIndex, z.endIndex + 1);
+      return {
+        zone: z,
+        coords: pts.map((p) => [p.lat, p.lng] as [number, number]),
+      };
+    });
+  }, [activeRoute, useAlternativeRoute]);
 
   const modeColor =
     gnssStatus === 'healthy'
@@ -295,35 +299,8 @@ export default function Dashboard() {
       {/* Side Status & Navigation Panel */}
       <div className="lg:w-80 xl:w-96 bg-white border-t lg:border-t-0 lg:border-l border-govt-border shrink-0 overflow-y-auto max-h-[45vh] lg:max-h-full">
         <div className="p-4 space-y-4">
-          {/* Active Corridor Card */}
-          <div className="bg-govt-grey/70 border border-govt-border rounded-lg p-3">
-            <div className="flex items-center justify-between mb-1.5">
-              <span className="text-[10px] font-bold text-navy uppercase tracking-wider">
-                Active Test Corridor
-              </span>
-              <button
-                onClick={() => setIsRoutePlannerOpen(true)}
-                className="text-[11px] text-navy font-bold hover:underline"
-              >
-                Change
-              </button>
-            </div>
-            <div className="text-xs font-bold text-govt-text mb-2 line-clamp-1">
-              {activeRoute.name}
-            </div>
-
-            {/* From -> To summary */}
-            <div className="space-y-1 text-[11px] text-govt-muted border-t border-gray-200 pt-2">
-              <div className="flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-govt-green shrink-0" />
-                <span className="truncate">{activeRoute.originName}</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-govt-red shrink-0" />
-                <span className="truncate">{activeRoute.destinationName}</span>
-              </div>
-            </div>
-          </div>
+          {/* Smart Co-Driver Assistant Panel */}
+          <SmartAssistant />
 
           {/* Navigation Mode Banner */}
           <div

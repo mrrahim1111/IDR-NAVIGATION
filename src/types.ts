@@ -43,6 +43,22 @@ export interface Maneuver {
   distanceMeters: number;
 }
 
+export interface TrafficZone {
+  locationName: string;
+  severity: 'low' | 'moderate' | 'high';
+  delaySeconds: number;
+  reason: string;
+}
+
+export interface AlternativeRoute {
+  name: string;
+  distanceKm: number;
+  estimatedMinutes: number;
+  waypoints: Position[];
+  reason: string;
+  hasBlackout: boolean;
+}
+
 export interface NavigationRoute {
   id: string;
   name: string;
@@ -57,6 +73,8 @@ export interface NavigationRoute {
   blackoutZones: BlackoutZone[];
   maneuvers: Maneuver[];
   tags: string[];
+  traffic: TrafficZone;
+  alternative: AlternativeRoute;
 }
 
 export interface NavigationState {
@@ -79,7 +97,6 @@ export interface NavigationState {
   gnssTrajectory: Position[];
   drTrajectory: Position[];
   blackoutSegment: Position[];
-  // Route Navigation additions
   activeRoute: NavigationRoute;
   isNavigating: boolean;
   isPaused: boolean;
@@ -88,6 +105,8 @@ export interface NavigationState {
   remainingDistanceMeters: number;
   activeBlackoutZone: BlackoutZone | null;
   autoBlackoutEnabled: boolean;
+  // Route variants (shortest vs. bypass)
+  useAlternativeRoute: boolean;
 }
 
 export interface ModuleStatus {

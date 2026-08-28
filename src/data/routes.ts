@@ -1,4 +1,4 @@
-import type { NavigationRoute, Position } from '../types';
+import type { NavigationRoute, Position, AlternativeRoute } from '../types';
 
 function generateInterpolatedPath(start: Position, end: Position, count: number, noise = 0.00005): Position[] {
   const points: Position[] = [];
@@ -17,6 +17,9 @@ const vja1 = generateInterpolatedPath({ lat: 16.5020, lng: 80.6380 }, { lat: 16.
 const vjaTunnel = generateInterpolatedPath({ lat: 16.5050, lng: 80.6440 }, { lat: 16.5085, lng: 80.6510 }, 20); // Underpass blackout
 const vja2 = generateInterpolatedPath({ lat: 16.5085, lng: 80.6510 }, { lat: 16.5140, lng: 80.6580 }, 18);
 const vjaWaypoints = [...vja1, ...vjaTunnel.slice(1), ...vja2.slice(1)];
+
+// Vijayawada Alternative (Surface bypass: MG Road instead of underpass expressway)
+const vjaAltPath = generateInterpolatedPath({ lat: 16.5020, lng: 80.6380 }, { lat: 16.5140, lng: 80.6580 }, 45, 0.0006);
 
 export const VIJAYAWADA_ROUTE: NavigationRoute = {
   id: 'vijayawada-nh16',
@@ -70,6 +73,20 @@ export const VIJAYAWADA_ROUTE: NavigationRoute = {
     },
   ],
   tags: ['Underpass', 'Urban Highway', 'SIH Target Zone'],
+  traffic: {
+    locationName: 'Kanaka Durga Underpass Entrance',
+    severity: 'high',
+    delaySeconds: 240,
+    reason: 'Waterlogging & vehicle breakdown inside underpass tunnel.',
+  },
+  alternative: {
+    name: 'MG Road Surface Bypass (Avoids Underpass)',
+    distanceKm: 3.7,
+    estimatedMinutes: 7, // Faster because it avoids the underpass traffic jam!
+    waypoints: vjaAltPath,
+    reason: 'Avoids underpass congestion & maintains full GNSS satellite lock.',
+    hasBlackout: false,
+  },
 };
 
 // 2. MUMBAI COASTAL ROAD TWIN TUNNEL (Marine Drive to Worli)
@@ -77,6 +94,8 @@ const mum1 = generateInterpolatedPath({ lat: 18.9430, lng: 72.8230 }, { lat: 18.
 const mumTunnel = generateInterpolatedPath({ lat: 18.9550, lng: 72.8120 }, { lat: 18.9740, lng: 72.8010 }, 30); // 2.07 km Undersea tunnel
 const mum2 = generateInterpolatedPath({ lat: 18.9740, lng: 72.8010 }, { lat: 18.9920, lng: 72.8120 }, 20);
 const mumWaypoints = [...mum1, ...mumTunnel.slice(1), ...mum2.slice(1)];
+
+const mumAltPath = generateInterpolatedPath({ lat: 18.9430, lng: 72.8230 }, { lat: 18.9920, lng: 72.8120 }, 55, 0.001);
 
 export const MUMBAI_ROUTE: NavigationRoute = {
   id: 'mumbai-coastal-tunnel',
@@ -130,6 +149,20 @@ export const MUMBAI_ROUTE: NavigationRoute = {
     },
   ],
   tags: ['Undersea Tunnel', 'Twin Tube', 'Severe Blackout'],
+  traffic: {
+    locationName: 'Coastal Tunnel Entry Gate',
+    severity: 'moderate',
+    delaySeconds: 90,
+    reason: 'Routine lane security checks at Marine Drive entry portal.',
+  },
+  alternative: {
+    name: 'Netaji Subhash Chandra Bose Road (Surface Bypass)',
+    distanceKm: 6.4,
+    estimatedMinutes: 11,
+    waypoints: mumAltPath,
+    reason: 'Scenic coastline route with constant GPS, but subject to city traffic signal stops.',
+    hasBlackout: false,
+  },
 };
 
 // 3. DELHI PRAGATI MAIDAN TRANSIT TUNNEL (Mathura Road to Ring Road)
@@ -137,6 +170,8 @@ const del1 = generateInterpolatedPath({ lat: 28.6180, lng: 77.2380 }, { lat: 28.
 const delTunnel = generateInterpolatedPath({ lat: 28.6170, lng: 77.2440 }, { lat: 28.6140, lng: 77.2560 }, 25); // 1.3 km Pragati tunnel
 const del2 = generateInterpolatedPath({ lat: 28.6140, lng: 77.2560 }, { lat: 28.6110, lng: 77.2620 }, 15);
 const delWaypoints = [...del1, ...delTunnel.slice(1), ...del2.slice(1)];
+
+const delAltPath = generateInterpolatedPath({ lat: 28.6180, lng: 77.2380 }, { lat: 28.6110, lng: 77.2620 }, 40, 0.0008);
 
 export const DELHI_ROUTE: NavigationRoute = {
   id: 'delhi-pragati-maidan',
@@ -190,6 +225,20 @@ export const DELHI_ROUTE: NavigationRoute = {
     },
   ],
   tags: ['Urban Underground', 'Multi-Level', 'Railway Underpass'],
+  traffic: {
+    locationName: 'Mathura Road Junction',
+    severity: 'low',
+    delaySeconds: 15,
+    reason: 'Normal urban traffic flow.',
+  },
+  alternative: {
+    name: 'Bhairon Marg Surface Loop (Avoids Tunnel)',
+    distanceKm: 3.1,
+    estimatedMinutes: 6,
+    waypoints: delAltPath,
+    reason: 'Full sky view for continuous GNSS lock; bypasses active underground section.',
+    hasBlackout: false,
+  },
 };
 
 // 4. ATAL TUNNEL ROHTANG (Himalayan High Altitude 9.02 km)
@@ -197,6 +246,8 @@ const atal1 = generateInterpolatedPath({ lat: 32.3600, lng: 77.1350 }, { lat: 32
 const atalTunnel = generateInterpolatedPath({ lat: 32.3640, lng: 77.1400 }, { lat: 32.4410, lng: 77.1640 }, 40); // 9.02 km tunnel
 const atal2 = generateInterpolatedPath({ lat: 32.4410, lng: 77.1640 }, { lat: 32.4480, lng: 77.1700 }, 10);
 const atalWaypoints = [...atal1, ...atalTunnel.slice(1), ...atal2.slice(1)];
+
+const atalAltPath = generateInterpolatedPath({ lat: 32.3600, lng: 77.1350 }, { lat: 32.4480, lng: 77.1700 }, 65, 0.003);
 
 export const ATAL_TUNNEL_ROUTE: NavigationRoute = {
   id: 'atal-tunnel-rohtang',
@@ -250,6 +301,20 @@ export const ATAL_TUNNEL_ROUTE: NavigationRoute = {
     },
   ],
   tags: ['Himalayan High Altitude', '9.02 km Long Tunnel', 'Critical Testbed'],
+  traffic: {
+    locationName: 'Atal Tunnel Tube Interior',
+    severity: 'high',
+    delaySeconds: 420,
+    reason: 'Single lane traffic control inside tunnel due to drainage maintenance.',
+  },
+  alternative: {
+    name: 'Old Rohtang Pass Mountain Road (Surface Bypass)',
+    distanceKm: 38.5,
+    estimatedMinutes: 120, // Mountain pass is way slower!
+    waypoints: atalAltPath,
+    reason: 'Scenic high-altitude pass (3,978m). Full sky view, but extremely slow, hazardous, and seasonal.',
+    hasBlackout: false,
+  },
 };
 
 export const PRESET_ROUTES: NavigationRoute[] = [
