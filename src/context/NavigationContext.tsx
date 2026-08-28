@@ -6,41 +6,11 @@ import type {
   SensorReading,
   MotionState,
   NavigationState,
+  NavigationRoute,
+  Maneuver,
+  BlackoutZone,
 } from '../types';
-
-// Predefined route near Vijayawada (16.5062°N, 80.6480°E)
-const ROUTE_POINTS: Position[] = [
-  { lat: 16.5020, lng: 80.6400 },
-  { lat: 16.5025, lng: 80.6410 },
-  { lat: 16.5030, lng: 80.6420 },
-  { lat: 16.5035, lng: 80.6430 },
-  { lat: 16.5040, lng: 80.6440 },
-  { lat: 16.5045, lng: 80.6448 },
-  { lat: 16.5050, lng: 80.6455 },
-  { lat: 16.5055, lng: 80.6460 },
-  { lat: 16.5058, lng: 80.6465 },
-  { lat: 16.5060, lng: 80.6470 },
-  { lat: 16.5062, lng: 80.6475 },
-  { lat: 16.5062, lng: 80.6480 },
-  { lat: 16.5063, lng: 80.6488 },
-  { lat: 16.5065, lng: 80.6495 },
-  { lat: 16.5068, lng: 80.6502 },
-  { lat: 16.5072, lng: 80.6508 },
-  { lat: 16.5076, lng: 80.6515 },
-  { lat: 16.5080, lng: 80.6520 },
-  { lat: 16.5085, lng: 80.6525 },
-  { lat: 16.5090, lng: 80.6530 },
-  { lat: 16.5095, lng: 80.6535 },
-  { lat: 16.5100, lng: 80.6540 },
-  { lat: 16.5105, lng: 80.6544 },
-  { lat: 16.5110, lng: 80.6548 },
-  { lat: 16.5115, lng: 80.6550 },
-  { lat: 16.5120, lng: 80.6552 },
-  { lat: 16.5125, lng: 80.6556 },
-  { lat: 16.5130, lng: 80.6560 },
-  { lat: 16.5135, lng: 80.6565 },
-  { lat: 16.5140, lng: 80.6570 },
-];
+import { PRESET_ROUTES, VIJAYAWADA_ROUTE } from '../data/routes';
 
 function getHeading(from: Position, to: Position): number {
   const dLng = to.lng - from.lng;
@@ -83,9 +53,16 @@ function generateSensorReading(base: number, noiseScale: number): SensorReading 
 }
 
 interface NavContextValue extends NavigationState {
+  availableRoutes: NavigationRoute[];
+  selectRoute: (routeId: string) => void;
+  startNavigation: () => void;
+  pauseNavigation: () => void;
+  resumeNavigation: () => void;
+  stopNavigation: () => void;
   simulateBlackout: () => void;
   restoreGNSS: () => void;
   resetSimulation: () => void;
+  toggleAutoBlackout: () => void;
 }
 
 const NavigationContext = createContext<NavContextValue | null>(null);
@@ -97,10 +74,15 @@ export function useNavigation(): NavContextValue {
 }
 
 export function NavigationProvider({ children }: { children: React.ReactNode }) {
+  const [activeRoute, setActiveRoute] = useState<NavigationRoute>(VIJAYAWADA_ROUTE);
   const [routeIndex, setRouteIndex] = useState(0);
+  const [isNavigating, setIsNavigating] = useState(true);
+  const [isPaused, setIsPaused] = useState(false);
+  const [autoBlackoutEnabled, setAutoBlackoutEnabled] = useState(true);
+
   const [gnssStatus, setGnssStatus] = useState<GNSSStatus>('healthy');
   const [navigationMode, setNavigationMode] = useState<NavigationMode>('GNSS + INS Fusion');
-  const [position, setPosition] = useState<Position>(ROUTE_POINTS[0]);
+  const [position, setPosition] = useState<Position>(VIJAYAWADA_ROUTE.waypoints[0]);
   const [speed, setSpeed] = useState(48);
   const [heading, setHeading] = useState(62);
   const [headingLabel, setHeadingLabel] = useState('North-East');
@@ -109,8 +91,9 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
   const [driftPercentage, setDriftPercentage] = useState(0);
   const [blackoutDistance, setBlackoutDistance] = useState(0);
   const [isBlackout, setIsBlackout] = useState(false);
-  const [systemMessage, setSystemMessage] = useState('System active. GNSS signal healthy.');
-  const [gnssTrajectory, setGnssTrajectory] = useState<Position[]>([ROUTE_POINTS[0]]);
+  const [systemMessage, setSystemMessage] = useState('System active. GNSS + INS Fusion engaged.');
+
+  const [gnssTrajectory, setGnssTrajectory] = useState<Position[]>([VIJAYAWADA_ROUTE.waypoints[0]]);
   const [drTrajectory, setDrTrajectory] = useState<Position[]>([]);
   const [blackoutSegment, setBlackoutSegment] = useState<Position[]>([]);
   const [accelerometer, setAccelerometer] = useState<SensorReading[]>([]);
@@ -118,78 +101,37 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
   const [motionState, setMotionState] = useState<MotionState>('Moving');
   const [motionConfidence, setMotionConfidence] = useState(94);
 
-  const blackoutStartRef = useRef<Position | null>(null);
+  const [currentManeuver, setCurrentManeuver] = useState<Maneuver | null>(VIJAYAWADA_ROUTE.maneuvers[0]);
+  const [distanceToNextManeuver, setDistanceToNextManeuver] = useState(550);
+  const [remainingDistanceMeters, setRemainingDistanceMeters] = useState(3400);
+  const [activeBlackoutZone, setActiveBlackoutZone] = useState<BlackoutZone | null>(null);
+
   const blackoutDistRef = useRef(0);
+  const driftAccumulatorRef = useRef(0);
   const recoveryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Vehicle movement simulation
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setRouteIndex((prev) => {
-        const next = prev < ROUTE_POINTS.length - 1 ? prev + 1 : 0;
-        const from = ROUTE_POINTS[prev];
-        const to = ROUTE_POINTS[next];
-
-        const newHeading = getHeading(from, to);
-        setHeading(newHeading);
-        setHeadingLabel(getHeadingLabel(newHeading));
-        setPosition(to);
-        setSpeed(42 + Math.random() * 16);
-
-        // Update trajectories
-        setGnssStatus((currentGnss) => {
-          if (currentGnss === 'healthy' || currentGnss === 'restored') {
-            setGnssTrajectory((t) => [...t.slice(-100), to]);
-          }
-          return currentGnss;
-        });
-
-        setIsBlackout((currentBlackout) => {
-          if (currentBlackout) {
-            setDrTrajectory((t) => [...t.slice(-100), to]);
-            setBlackoutSegment((t) => [...t.slice(-100), to]);
-            const dist = distanceBetween(from, to);
-            blackoutDistRef.current += dist;
-            setBlackoutDistance(blackoutDistRef.current);
-            const d = 1.2 + Math.random() * 0.8;
-            setDrift((prev) => prev + d * 0.15);
-            setDriftPercentage(() => {
-              const totalDist = blackoutDistRef.current;
-              if (totalDist === 0) return 0;
-              return parseFloat(((drift / totalDist) * 100).toFixed(2));
-            });
-            setPositionConfidence((prev) => Math.max(78, prev - 0.3));
-          }
-          return currentBlackout;
-        });
-
-        // Update sensor data
-        const noiseScale = 2.5;
-        setAccelerometer((prev) => [...prev.slice(-60), generateSensorReading(0.5, noiseScale)]);
-        setGyroscope((prev) => [
-          ...prev.slice(-60),
-          generateSensorReading(0.02, noiseScale * 0.1),
-        ]);
-
-        // Cycle motion states occasionally
-        if (Math.random() < 0.05) {
-          const states: MotionState[] = [
-            'Moving',
-            'Accelerating',
-            'Turning',
-            'Moving',
-            'Moving',
-          ];
-          setMotionState(states[Math.floor(Math.random() * states.length)]);
-          setMotionConfidence(88 + Math.random() * 10);
-        }
-
-        return next;
-      });
-    }, 800);
-
-    return () => clearInterval(interval);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // Switch Route Function
+  const selectRoute = useCallback((routeId: string) => {
+    const route = PRESET_ROUTES.find((r) => r.id === routeId) || VIJAYAWADA_ROUTE;
+    setActiveRoute(route);
+    setRouteIndex(0);
+    setPosition(route.waypoints[0]);
+    setGnssTrajectory([route.waypoints[0]]);
+    setDrTrajectory([]);
+    setBlackoutSegment([]);
+    setIsBlackout(false);
+    setGnssStatus('healthy');
+    setNavigationMode('GNSS + INS Fusion');
+    setDrift(0);
+    setDriftPercentage(0);
+    setBlackoutDistance(0);
+    blackoutDistRef.current = 0;
+    driftAccumulatorRef.current = 0;
+    setCurrentManeuver(route.maneuvers[0]);
+    setRemainingDistanceMeters(route.distanceKm * 1000);
+    setSystemMessage(`Route loaded: ${route.name}. Ready for navigation.`);
+    setIsPaused(false);
+    setIsNavigating(true);
   }, []);
 
   const simulateBlackout = useCallback(() => {
@@ -201,58 +143,169 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
     setDrift(0);
     setDriftPercentage(0);
     blackoutDistRef.current = 0;
+    driftAccumulatorRef.current = 0;
     setBlackoutDistance(0);
-    blackoutStartRef.current = { ...position };
     setBlackoutSegment([{ ...position }]);
     setDrTrajectory([{ ...position }]);
   }, [position]);
 
   const restoreGNSS = useCallback(() => {
-    // Phase 1: Restored
     setGnssStatus('restored');
     setNavigationMode('Fusion Correction');
-    setSystemMessage('✓ GNSS signal restored. Correcting inertial trajectory...');
+    setSystemMessage('✓ GNSS signal restored. Fusion correction in progress...');
 
-    // Phase 2: After 2s, stabilize
     if (recoveryTimerRef.current) clearTimeout(recoveryTimerRef.current);
     recoveryTimerRef.current = setTimeout(() => {
       setGnssStatus('healthy');
       setNavigationMode('GNSS + INS Fusion');
       setSystemMessage('✓ Navigation stabilized. GNSS + INS Fusion active.');
       setIsBlackout(false);
+      setActiveBlackoutZone(null);
       setPositionConfidence(98);
       setDrift(0);
       setDriftPercentage(0);
       setBlackoutDistance(0);
 
-      // Move blackout segment into GNSS trajectory for continuity
       setBlackoutSegment((seg) => {
         setGnssTrajectory((t) => [...t, ...seg]);
         return [];
       });
       setDrTrajectory([]);
-    }, 3000);
+    }, 2800);
+  }, []);
+
+  // Main Vehicle Route Loop
+  useEffect(() => {
+    if (!isNavigating || isPaused) return;
+
+    const interval = setInterval(() => {
+      setRouteIndex((prev) => {
+        const waypoints = activeRoute.waypoints;
+        const next = prev < waypoints.length - 1 ? prev + 1 : 0;
+        const from = waypoints[prev];
+        const to = waypoints[next];
+
+        // Heading & Speed
+        const newHeading = getHeading(from, to);
+        setHeading(newHeading);
+        setHeadingLabel(getHeadingLabel(newHeading));
+        setPosition(to);
+        setSpeed(Math.max(25, Math.min(activeRoute.speedLimitKmh, 40 + Math.random() * 20)));
+
+        // Calculate remaining trip distance
+        let remDist = 0;
+        for (let i = next; i < waypoints.length - 1; i++) {
+          remDist += distanceBetween(waypoints[i], waypoints[i + 1]);
+        }
+        setRemainingDistanceMeters(Math.round(remDist));
+
+        // Find applicable maneuver
+        const nextManeuver = [...activeRoute.maneuvers]
+          .reverse()
+          .find((m) => next >= m.stepIndex) || activeRoute.maneuvers[0];
+        setCurrentManeuver(nextManeuver);
+
+        // Check if inside any BlackoutZone
+        const matchingZone = activeRoute.blackoutZones.find(
+          (z) => next >= z.startIndex && next <= z.endIndex
+        );
+
+        if (autoBlackoutEnabled) {
+          if (matchingZone && !isBlackout && gnssStatus === 'healthy') {
+            // ENTERING BLACKOUT ZONE
+            setIsBlackout(true);
+            setActiveBlackoutZone(matchingZone);
+            setGnssStatus('unavailable');
+            setNavigationMode('Intelligent Dead Reckoning');
+            setSystemMessage(`⚠ Entering ${matchingZone.name} (${matchingZone.type}). Satellite link lost. AI Dead Reckoning engaged.`);
+            blackoutDistRef.current = 0;
+            driftAccumulatorRef.current = 0;
+            setBlackoutDistance(0);
+            setDrift(0);
+            setDriftPercentage(0);
+            setBlackoutSegment([to]);
+            setDrTrajectory([to]);
+          } else if (!matchingZone && isBlackout && gnssStatus === 'unavailable') {
+            // EXITING BLACKOUT ZONE
+            restoreGNSS();
+          }
+        }
+
+        // Update Trajectories
+        if (gnssStatus === 'healthy' || gnssStatus === 'restored') {
+          setGnssTrajectory((t) => [...t.slice(-120), to]);
+        }
+
+        if (isBlackout) {
+          setDrTrajectory((t) => [...t.slice(-120), to]);
+          setBlackoutSegment((t) => [...t.slice(-120), to]);
+          const stepDist = distanceBetween(from, to);
+          blackoutDistRef.current += stepDist;
+          setBlackoutDistance(Math.round(blackoutDistRef.current));
+
+          // Dead reckoning drift calculation (realistic 3-5% error rate)
+          const errorPerMeter = 0.035 + (Math.random() * 0.02);
+          driftAccumulatorRef.current += stepDist * errorPerMeter;
+          setDrift(parseFloat(driftAccumulatorRef.current.toFixed(1)));
+
+          if (blackoutDistRef.current > 0) {
+            const pct = (driftAccumulatorRef.current / blackoutDistRef.current) * 100;
+            setDriftPercentage(parseFloat(pct.toFixed(2)));
+          }
+
+          setPositionConfidence((c) => Math.max(82, c - 0.2));
+        }
+
+        // Sensor Feed (Accelerometer & Gyroscope)
+        const disturbance = isBlackout ? 3.8 : 2.0;
+        setAccelerometer((prev) => [...prev.slice(-60), generateSensorReading(0.6, disturbance)]);
+        setGyroscope((prev) => [...prev.slice(-60), generateSensorReading(0.02, disturbance * 0.12)]);
+
+        // Motion State Classification
+        if (Math.random() < 0.08) {
+          const states: MotionState[] = ['Moving', 'Accelerating', 'Turning', 'Moving', 'Moving'];
+          if (isBlackout && Math.random() < 0.3) {
+            states.push('Road Disturbance Detected');
+          }
+          setMotionState(states[Math.floor(Math.random() * states.length)]);
+          setMotionConfidence(Math.round(89 + Math.random() * 9));
+        }
+
+        return next;
+      });
+    }, 750);
+
+    return () => clearInterval(interval);
+  }, [isNavigating, isPaused, activeRoute, isBlackout, gnssStatus, autoBlackoutEnabled, restoreGNSS]);
+
+  const startNavigation = useCallback(() => {
+    setIsNavigating(true);
+    setIsPaused(false);
+    setSystemMessage(`Navigating along ${activeRoute.name}`);
+  }, [activeRoute]);
+
+  const pauseNavigation = useCallback(() => {
+    setIsPaused(true);
+    setSystemMessage('Navigation paused.');
+  }, []);
+
+  const resumeNavigation = useCallback(() => {
+    setIsPaused(false);
+    setSystemMessage('Navigation resumed.');
+  }, []);
+
+  const stopNavigation = useCallback(() => {
+    setIsNavigating(false);
+    setIsPaused(false);
+    setSystemMessage('Navigation stopped.');
   }, []);
 
   const resetSimulation = useCallback(() => {
-    setRouteIndex(0);
-    setGnssStatus('healthy');
-    setNavigationMode('GNSS + INS Fusion');
-    setPosition(ROUTE_POINTS[0]);
-    setSpeed(48);
-    setHeading(62);
-    setHeadingLabel('North-East');
-    setPositionConfidence(98);
-    setDrift(0);
-    setDriftPercentage(0);
-    setBlackoutDistance(0);
-    setIsBlackout(false);
-    setSystemMessage('System active. GNSS signal healthy.');
-    setGnssTrajectory([ROUTE_POINTS[0]]);
-    setDrTrajectory([]);
-    setBlackoutSegment([]);
-    blackoutDistRef.current = 0;
-    blackoutStartRef.current = null;
+    selectRoute(activeRoute.id);
+  }, [activeRoute.id, selectRoute]);
+
+  const toggleAutoBlackout = useCallback(() => {
+    setAutoBlackoutEnabled((prev) => !prev);
   }, []);
 
   const value: NavContextValue = {
@@ -275,12 +328,25 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
     gyroscope,
     motionState,
     motionConfidence,
+    activeRoute,
+    isNavigating,
+    isPaused,
+    currentManeuver,
+    distanceToNextManeuver,
+    remainingDistanceMeters,
+    activeBlackoutZone,
+    autoBlackoutEnabled,
+    availableRoutes: PRESET_ROUTES,
+    selectRoute,
+    startNavigation,
+    pauseNavigation,
+    resumeNavigation,
+    stopNavigation,
     simulateBlackout,
     restoreGNSS,
     resetSimulation,
+    toggleAutoBlackout,
   };
 
-  return (
-    <NavigationContext.Provider value={value}>{children}</NavigationContext.Provider>
-  );
+  return <NavigationContext.Provider value={value}>{children}</NavigationContext.Provider>;
 }

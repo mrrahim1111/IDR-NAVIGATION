@@ -26,6 +26,39 @@ export interface SensorReading {
   timestamp: number;
 }
 
+export interface BlackoutZone {
+  name: string;
+  type: 'Tunnel' | 'Underpass' | 'Urban Canyon' | 'Forest Dense Canopy';
+  startIndex: number;
+  endIndex: number;
+  lengthMeters: number;
+  description: string;
+}
+
+export interface Maneuver {
+  stepIndex: number;
+  instruction: string;
+  roadName: string;
+  direction: 'straight' | 'slight-right' | 'right' | 'slight-left' | 'left' | 'u-turn' | 'tunnel-entry' | 'destination';
+  distanceMeters: number;
+}
+
+export interface NavigationRoute {
+  id: string;
+  name: string;
+  originName: string;
+  destinationName: string;
+  originCoords: Position;
+  destinationCoords: Position;
+  distanceKm: number;
+  estimatedMinutes: number;
+  speedLimitKmh: number;
+  waypoints: Position[];
+  blackoutZones: BlackoutZone[];
+  maneuvers: Maneuver[];
+  tags: string[];
+}
+
 export interface NavigationState {
   gnssStatus: GNSSStatus;
   navigationMode: NavigationMode;
@@ -46,6 +79,15 @@ export interface NavigationState {
   gnssTrajectory: Position[];
   drTrajectory: Position[];
   blackoutSegment: Position[];
+  // Route Navigation additions
+  activeRoute: NavigationRoute;
+  isNavigating: boolean;
+  isPaused: boolean;
+  currentManeuver: Maneuver | null;
+  distanceToNextManeuver: number;
+  remainingDistanceMeters: number;
+  activeBlackoutZone: BlackoutZone | null;
+  autoBlackoutEnabled: boolean;
 }
 
 export interface ModuleStatus {
