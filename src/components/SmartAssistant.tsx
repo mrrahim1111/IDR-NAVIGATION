@@ -8,6 +8,10 @@ import {
   ArrowRight,
   TrendingDown,
   Info,
+  Settings,
+  Eye,
+  EyeOff,
+  Play,
 } from 'lucide-react';
 import { useNavigation } from '../context/NavigationContext';
 
@@ -17,6 +21,8 @@ export default function SmartAssistant() {
     useAlternativeRoute,
     toggleRouteVariant,
     speakAssistantMessage,
+    voiceConfig,
+    updateVoiceConfig,
   } = useNavigation();
 
   const traffic = activeRoute.traffic;
@@ -46,6 +52,9 @@ export default function SmartAssistant() {
         ? 'bg-amber-100 text-govt-amber border-amber-200'
         : 'bg-green-100 text-govt-green border-green-200';
 
+  const [isSettingsOpen, setIsSettingsOpen] = React.useState(false);
+  const [showApiKey, setShowApiKey] = React.useState(false);
+
   return (
     <div className="bg-white border border-govt-border rounded-lg shadow-sm overflow-hidden text-govt-text">
       {/* Header */}
@@ -62,6 +71,183 @@ export default function SmartAssistant() {
           <Volume2 className="w-3.5 h-3.5" />
         </button>
       </div>
+
+      {/* Voice Selection Row */}
+      <div className="bg-slate-50 border-b border-govt-border px-3.5 py-2 flex flex-wrap items-center justify-between gap-2 text-xs">
+        <div className="flex items-center gap-1.5 font-semibold text-govt-text">
+          <span>Voice:</span>
+          <select
+            value={voiceConfig.persona}
+            onChange={(e) => updateVoiceConfig({ persona: e.target.value as any })}
+            className="bg-white border border-govt-border rounded px-2 py-1 text-xs focus:ring-1 focus:ring-navy focus:border-navy cursor-pointer font-medium"
+          >
+            <option value="default">System Default</option>
+            <option value="amitabh">Amitabh Bachchan (Deep IN)</option>
+            <option value="morgan">Morgan Freeman (Deep US)</option>
+            <option value="jarvis">JARVIS (British Tech)</option>
+            <option value="scarlett">Scarlett Johansson (Samantha)</option>
+          </select>
+        </div>
+        
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => speakAssistantMessage("Hello, this is your AI Navigation Co-Driver. I will guide you along your route.")}
+            className="p-1 text-navy hover:bg-navy/10 rounded transition-colors"
+            title="Test current voice"
+          >
+            <Play className="w-3.5 h-3.5 fill-current" />
+          </button>
+          
+          <button
+            onClick={() => setIsSettingsOpen(!isSettingsOpen)}
+            className={`p-1 rounded transition-colors ${isSettingsOpen ? 'bg-navy/10 text-navy' : 'text-govt-muted hover:bg-slate-200'}`}
+            title="Advanced voice settings"
+          >
+            <Settings className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+
+      {/* Advanced Voice Settings Panel */}
+      {isSettingsOpen && (
+        <div className="bg-slate-100 border-b border-govt-border p-3.5 space-y-3 text-xs">
+          <div className="flex items-center justify-between border-b border-slate-200 pb-1.5 font-bold text-navy">
+            <span>Voice Assistant Settings</span>
+            {voiceConfig.useElevenLabs && (
+              <span className="flex items-center gap-1 text-[10px] text-green-600 font-medium">
+                <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
+                ElevenLabs Active
+              </span>
+            )}
+          </div>
+          
+          {/* Play Chime Toggle */}
+          <div className="flex items-center justify-between">
+            <label className="font-semibold text-govt-text flex flex-col cursor-pointer" htmlFor="playChime">
+              <span>Play wake chime sound</span>
+              <span className="text-[9px] text-govt-muted font-normal">Double chime before speech</span>
+            </label>
+            <input
+              id="playChime"
+              type="checkbox"
+              checked={voiceConfig.playChime}
+              onChange={(e) => updateVoiceConfig({ playChime: e.target.checked })}
+              className="rounded text-navy focus:ring-navy border-govt-border w-4 h-4 cursor-pointer"
+            />
+          </div>
+          
+          {/* ElevenLabs API Toggle */}
+          <div className="space-y-1 border-t border-slate-200 pt-2">
+            <div className="flex items-center justify-between">
+              <label className="font-bold text-govt-text cursor-pointer" htmlFor="useElevenLabs">
+                Use ElevenLabs AI Cloning
+              </label>
+              <input
+                id="useElevenLabs"
+                type="checkbox"
+                checked={voiceConfig.useElevenLabs}
+                onChange={(e) => updateVoiceConfig({ useElevenLabs: e.target.checked })}
+                className="rounded text-navy focus:ring-navy border-govt-border w-4 h-4 cursor-pointer"
+              />
+            </div>
+            <p className="text-[10px] text-govt-muted">
+              Use ElevenLabs API for high-fidelity actor clones.
+            </p>
+          </div>
+          
+          {voiceConfig.useElevenLabs && (
+            <div className="space-y-3.5 pl-2 border-l-2 border-navy/20">
+              {/* API Key Input */}
+              <div className="space-y-1">
+                <label className="font-semibold text-govt-text">ElevenLabs API Key</label>
+                <div className="relative">
+                  <input
+                    type={showApiKey ? 'text' : 'password'}
+                    value={voiceConfig.elevenLabsApiKey}
+                    onChange={(e) => updateVoiceConfig({ elevenLabsApiKey: e.target.value })}
+                    placeholder="Enter ElevenLabs API Key"
+                    className="w-full bg-white border border-govt-border rounded pl-2.5 pr-8 py-1 text-xs focus:ring-1 focus:ring-navy focus:border-navy"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowApiKey(!showApiKey)}
+                    className="absolute right-2 top-1.5 text-govt-muted hover:text-govt-text"
+                  >
+                    {showApiKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+              </div>
+              
+              {/* Voice IDs Mapping */}
+              <div className="space-y-2">
+                <div className="font-semibold text-govt-text border-b border-slate-200 pb-0.5">
+                  Voice IDs Mapping
+                </div>
+                
+                <div className="grid grid-cols-2 gap-2 text-[10px]">
+                  <div>
+                    <label className="text-govt-muted block mb-0.5">Amitabh Bachchan</label>
+                    <input
+                      type="text"
+                      value={voiceConfig.elevenLabsVoiceIds.amitabh}
+                      onChange={(e) => updateVoiceConfig({
+                        elevenLabsVoiceIds: { ...voiceConfig.elevenLabsVoiceIds, amitabh: e.target.value }
+                      })}
+                      className="w-full bg-white border border-govt-border rounded px-1.5 py-0.5 font-mono text-[9px]"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-govt-muted block mb-0.5">Morgan Freeman</label>
+                    <input
+                      type="text"
+                      value={voiceConfig.elevenLabsVoiceIds.morgan}
+                      onChange={(e) => updateVoiceConfig({
+                        elevenLabsVoiceIds: { ...voiceConfig.elevenLabsVoiceIds, morgan: e.target.value }
+                      })}
+                      className="w-full bg-white border border-govt-border rounded px-1.5 py-0.5 font-mono text-[9px]"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-govt-muted block mb-0.5">JARVIS (Tech)</label>
+                    <input
+                      type="text"
+                      value={voiceConfig.elevenLabsVoiceIds.jarvis}
+                      onChange={(e) => updateVoiceConfig({
+                        elevenLabsVoiceIds: { ...voiceConfig.elevenLabsVoiceIds, jarvis: e.target.value }
+                      })}
+                      className="w-full bg-white border border-govt-border rounded px-1.5 py-0.5 font-mono text-[9px]"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-govt-muted block mb-0.5">Scarlett (Samantha)</label>
+                    <input
+                      type="text"
+                      value={voiceConfig.elevenLabsVoiceIds.scarlett}
+                      onChange={(e) => updateVoiceConfig({
+                        elevenLabsVoiceIds: { ...voiceConfig.elevenLabsVoiceIds, scarlett: e.target.value }
+                      })}
+                      className="w-full bg-white border border-govt-border rounded px-1.5 py-0.5 font-mono text-[9px]"
+                    />
+                  </div>
+                </div>
+                
+                {/* Info Tip */}
+                <div className="bg-blue-50 text-blue-800 border border-blue-100 rounded p-2 text-[10px] space-y-1 font-medium leading-relaxed">
+                  <div className="font-bold flex items-center gap-1">
+                    <Info className="w-3 h-3 text-blue-700 shrink-0" />
+                    How to clone any actor's voice:
+                  </div>
+                  <ol className="list-decimal list-inside pl-0.5 space-y-0.5 text-[9px] font-normal">
+                    <li>Record 1 min of clean actor audio (e.g. from YouTube).</li>
+                    <li>Go to ElevenLabs Voice Library and add a new cloned voice.</li>
+                    <li>Copy its Voice ID and paste it in the inputs above!</li>
+                  </ol>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="p-3.5 space-y-3">
         {/* Real-time traffic congestion card */}

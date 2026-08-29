@@ -52,6 +52,21 @@ function generateSensorReading(base: number, noiseScale: number): SensorReading 
   };
 }
 
+export type VoicePersona = 'default' | 'amitabh' | 'morgan' | 'jarvis' | 'scarlett';
+
+export interface VoiceConfig {
+  persona: VoicePersona;
+  useElevenLabs: boolean;
+  elevenLabsApiKey: string;
+  elevenLabsVoiceIds: {
+    amitabh: string;
+    morgan: string;
+    jarvis: string;
+    scarlett: string;
+  };
+  playChime: boolean;
+}
+
 interface NavContextValue extends NavigationState {
   availableRoutes: NavigationRoute[];
   selectRoute: (routeId: string) => void;
@@ -65,6 +80,8 @@ interface NavContextValue extends NavigationState {
   toggleAutoBlackout: () => void;
   // Route selection variants
   toggleRouteVariant: () => void;
+  voiceConfig: VoiceConfig;
+  updateVoiceConfig: (config: Partial<VoiceConfig>) => void;
   speakAssistantMessage: (text: string) => void;
 }
 
@@ -114,16 +131,209 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
   const driftAccumulatorRef = useRef(0);
   const recoveryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Text to Speech Helper using Web Speech API
-  const speakAssistantMessage = useCallback((text: string) => {
+  const elevenLabsAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  const [voiceConfig, setVoiceConfig] = useState<VoiceConfig>(() => {
+    const saved = localStorage.getItem('sih_voice_config');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        console.error('Failed to parse saved voice config', e);
+      }
+    }
+    return {
+      persona: 'default',
+      useElevenLabs: false,
+      elevenLabsApiKey: '',
+      elevenLabsVoiceIds: {
+        amitabh: 'N2l57XT2szw66Tj6o52b',
+        morgan: 'VR6AQC4as24tcl9EXaGt',
+        jarvis: 'pNInz6obpgHs5162wdla',
+        scarlett: 'EXAVITQu4vr4xnSDxMaL',
+      },
+      playChime: true,
+    };
+  });
+
+  useEffect(() => {
+    localStorage.setItem('sih_voice_config', JSON.stringify(voiceConfig));
+  }, [voiceConfig]);
+
+  // Pre-load voices on load
+  useEffect(() => {
     if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel(); // Cancel any ongoing speech
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 0.95;
-      utterance.pitch = 1.0;
-      window.speechSynthesis.speak(utterance);
+      window.speechSynthesis.getVoices();
     }
   }, []);
+
+  const updateVoiceConfig = useCallback((newConfig: Partial<VoiceConfig>) => {
+    setVoiceConfig((prev) => {
+      const updated = { ...prev, ...newConfig };
+      if (newConfig.elevenLabsVoiceIds) {
+        updated.elevenLabsVoiceIds = { ...prev.elevenLabsVoiceIds, ...newConfig.elevenLabsVoiceIds };
+      }
+      return updated;
+    });
+  }, []);
+
+  const playChime = useCallback(() => {
+    if (!('AudioContext' in window || 'webkitAudioContext' in window)) return;
+    try {
+      const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+      const ctx = new AudioContext();
+      
+      const osc1 = ctx.createOscillator();
+      const gain1 = ctx.createGain();
+      const osc2 = ctx.createOscillator();
+      const gain2 = ctx.createGain();
+      
+      osc1.connect(gain1);
+      gain1.connect(ctx.destination);
+      osc2.connect(gain2);
+      gain2.connect(ctx.destination);
+      
+      const now = ctx.currentTime;
+      
+      osc1.type = 'sine';
+      osc1.frequency.setValueAtTime(523.25, now); // C5
+      osc1.frequency.exponentialRampToValueAtTime(1046.50, now + 0.12); // C6
+      gain1.gain.setValueAtTime(0.12, now);
+      gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+      
+      osc2.type = 'triangle';
+      osc2.frequency.setValueAtTime(659.25, now + 0.06); // E5
+      osc2.frequency.exponentialRampToValueAtTime(1318.51, now + 0.20); // E6
+      gain2.gain.setValueAtTime(0, now);
+      gain2.gain.setValueAtTime(0.08, now + 0.06);
+      gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+      
+      osc1.start(now);
+      osc1.stop(now + 0.25);
+      osc2.start(now + 0.06);
+      osc2.stop(now + 0.35);
+    } catch (e) {
+      console.error('Failed to play synthetic chime:', e);
+    }
+  }, []);
+
+  const speakNativeSpeech = useCallback((text: string, persona: VoicePersona) => {
+    if (!('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    
+    let pitch = 1.0;
+    let rate = 0.95;
+    
+    switch (persona) {
+      case 'amitabh':
+        pitch = 0.78;
+        rate = 0.88;
+        break;
+      case 'morgan':
+        pitch = 0.75;
+        rate = 0.80;
+        break;
+      case 'jarvis':
+        pitch = 1.05;
+        rate = 0.98;
+        break;
+      case 'scarlett':
+        pitch = 0.95;
+        rate = 0.90;
+        break;
+      default:
+        pitch = 1.0;
+        rate = 0.95;
+        break;
+    }
+    
+    utterance.pitch = pitch;
+    utterance.rate = rate;
+    
+    const voices = window.speechSynthesis.getVoices();
+    if (voices.length > 0) {
+      let matchedVoice = null;
+      if (persona === 'amitabh') {
+        matchedVoice = voices.find(v => v.lang.includes('IN') && v.name.toLowerCase().includes('male')) ||
+                       voices.find(v => v.lang.includes('IN')) ||
+                       voices.find(v => v.lang.includes('hi')) ||
+                       voices.find(v => v.lang.includes('en'));
+      } else if (persona === 'jarvis') {
+        matchedVoice = voices.find(v => v.lang.includes('GB') && v.name.toLowerCase().includes('male')) ||
+                       voices.find(v => v.lang.includes('GB')) ||
+                       voices.find(v => v.lang.includes('en'));
+      } else if (persona === 'morgan') {
+        matchedVoice = voices.find(v => v.lang.includes('US') && v.name.toLowerCase().includes('male')) ||
+                       voices.find(v => v.lang.includes('US')) ||
+                       voices.find(v => v.lang.includes('en'));
+      } else if (persona === 'scarlett') {
+        matchedVoice = voices.find(v => v.lang.includes('US') && v.name.toLowerCase().includes('female')) ||
+                       voices.find(v => (v.name.toLowerCase().includes('samantha') || v.name.toLowerCase().includes('zira') || v.name.toLowerCase().includes('victoria'))) ||
+                       voices.find(v => v.lang.includes('US')) ||
+                       voices.find(v => v.lang.includes('en'));
+      }
+      if (matchedVoice) {
+        utterance.voice = matchedVoice;
+      }
+    }
+    window.speechSynthesis.speak(utterance);
+  }, []);
+
+  const speakElevenLabs = useCallback(async (text: string, voiceId: string, apiKey: string) => {
+    try {
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
+      if (elevenLabsAudioRef.current) {
+        elevenLabsAudioRef.current.pause();
+        elevenLabsAudioRef.current.src = '';
+      }
+      const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+        method: 'POST',
+        headers: {
+          'Accept': 'audio/mpeg',
+          'Content-Type': 'application/json',
+          'xi-api-key': apiKey,
+        },
+        body: JSON.stringify({
+          text: text,
+          model_id: 'eleven_monolingual_v1',
+          voice_settings: {
+            stability: 0.5,
+            similarity_boost: 0.75,
+          },
+        }),
+      });
+      if (!response.ok) {
+        const errorDetail = await response.text();
+        throw new Error(`HTTP ${response.status} - ${errorDetail}`);
+      }
+      const blob = await response.blob();
+      const audioUrl = URL.createObjectURL(blob);
+      const audio = new Audio(audioUrl);
+      elevenLabsAudioRef.current = audio;
+      await audio.play();
+    } catch (err) {
+      console.error('ElevenLabs synthesis failed, falling back to native browser voice:', err);
+      speakNativeSpeech(text, voiceConfig.persona);
+    }
+  }, [voiceConfig.persona, speakNativeSpeech]);
+
+  const speakAssistantMessage = useCallback((text: string) => {
+    if (voiceConfig.playChime) {
+      playChime();
+    }
+    const speakDelay = voiceConfig.playChime ? 350 : 0;
+    setTimeout(() => {
+      if (voiceConfig.useElevenLabs && voiceConfig.elevenLabsApiKey) {
+        const voiceId = voiceConfig.elevenLabsVoiceIds[voiceConfig.persona as keyof typeof voiceConfig.elevenLabsVoiceIds] || voiceConfig.elevenLabsVoiceIds.morgan;
+        speakElevenLabs(text, voiceId, voiceConfig.elevenLabsApiKey);
+      } else {
+        speakNativeSpeech(text, voiceConfig.persona);
+      }
+    }, speakDelay);
+  }, [voiceConfig, playChime, speakElevenLabs, speakNativeSpeech]);
 
   // Switch Route Function
   const selectRoute = useCallback((routeId: string) => {
@@ -394,6 +604,8 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
     resetSimulation,
     toggleAutoBlackout,
     toggleRouteVariant,
+    voiceConfig,
+    updateVoiceConfig,
     speakAssistantMessage,
   };
 

@@ -10,6 +10,7 @@ import {
   Gauge,
   Info,
   ShieldAlert,
+  Mic,
 } from 'lucide-react';
 import { useNavigation } from '../context/NavigationContext';
 
@@ -24,6 +25,48 @@ export default function RoutePlanner({ onClose }: { onClose?: () => void }) {
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedRouteId, setSelectedRouteId] = useState(activeRoute.id);
+  const [isListening, setIsListening] = useState(false);
+
+  const startSpeechRecognition = () => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      alert('Speech Recognition is not supported in this browser. Please use Google Chrome or Safari.');
+      return;
+    }
+
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.continuous = false;
+      recognition.interimResults = false;
+      recognition.lang = 'en-IN';
+
+      recognition.onstart = () => {
+        setIsListening(true);
+      };
+
+      recognition.onerror = (event: any) => {
+        console.error('Speech recognition error:', event);
+        setIsListening(false);
+      };
+
+      recognition.onend = () => {
+        setIsListening(false);
+      };
+
+      recognition.onresult = (event: any) => {
+        if (event.results && event.results[0]) {
+          const transcript = event.results[0][0].transcript;
+          const query = transcript.trim().replace(/\.$/, '');
+          setSearchQuery(query);
+        }
+      };
+
+      recognition.start();
+    } catch (e) {
+      console.error('Failed to start speech recognition:', e);
+      setIsListening(false);
+    }
+  };
 
   const filteredRoutes = availableRoutes.filter((r) =>
     r.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -97,9 +140,25 @@ export default function RoutePlanner({ onClose }: { onClose?: () => void }) {
           type="text"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="Search Indian testing corridors (e.g. Tunnel, Mumbai, Delhi)..."
-          className="w-full pl-9 pr-3 py-2 text-xs border border-govt-border rounded focus:outline-none focus:border-navy bg-white"
+          placeholder={isListening ? "Listening for location..." : "Search Indian testing corridors (e.g. Tunnel, Mumbai)..."}
+          className={`w-full pl-9 pr-10 py-2 text-xs border rounded focus:outline-none focus:border-navy bg-white transition-all ${
+            isListening ? 'border-red-400 bg-red-50/10 placeholder-red-400 animate-pulse' : 'border-govt-border'
+          }`}
         />
+        <button
+          type="button"
+          onClick={startSpeechRecognition}
+          className={`absolute right-2.5 top-1.5 p-1 rounded-full transition-colors flex items-center justify-center ${
+            isListening ? 'text-govt-red bg-red-100 animate-bounce' : 'text-govt-muted hover:bg-slate-100'
+          }`}
+          title="Speak to Search Location"
+        >
+          {isListening ? (
+            <Mic className="w-3.5 h-3.5 fill-current" />
+          ) : (
+            <Mic className="w-3.5 h-3.5" />
+          )}
+        </button>
       </div>
 
       {/* Preset Route Cards */}
