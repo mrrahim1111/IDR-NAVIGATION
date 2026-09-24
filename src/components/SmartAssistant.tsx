@@ -2,6 +2,9 @@ import React from 'react';
 import {
   Sparkles,
   Volume2,
+  VolumeX,
+  Mic,
+  MicOff,
   AlertTriangle,
   Clock,
   Compass,
@@ -15,38 +18,87 @@ import {
 } from 'lucide-react';
 import { useNavigation } from '../context/NavigationContext';
 
+type VoiceRecognition = {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  start: () => void;
+  onstart: (() => void) | null;
+  onend: (() => void) | null;
+  onerror: ((event: { error: string }) => void) | null;
+  onresult: ((event: { results: { 0: { 0: { transcript: string } } } }) => void) | null;
+};
+
+type VoiceRecognitionConstructor = new () => VoiceRecognition;
+
 export default function SmartAssistant() {
   const {
     activeRoute,
     useAlternativeRoute,
     toggleRouteVariant,
+    currentManeuver,
+    remainingDistanceMeters,
+    isBlackout,
+    activeBlackoutZone,
+    gnssStatus,
+    isNavigating,
+    isPaused,
+    isLiveDataEnabled,
+    hasLiveGpsFix,
+    vehicleType,
     speakAssistantMessage,
+    stopAssistantMessage,
+    isAssistantSpeaking,
     voiceConfig,
     updateVoiceConfig,
+    startNavigation,
+    pauseNavigation,
+    resumeNavigation,
+    setVehicleType,
   } = useNavigation();
 
   const traffic = activeRoute.traffic;
   const alt = activeRoute.alternative;
+  const isLiveRoute = activeRoute.tags.includes('Live road route');
+  const hasConfiguredBypass = !isLiveRoute && alt.name !== 'Live route alternative';
 
   // Assistant advice generation
   const getAdviceText = () => {
-    if (useAlternativeRoute) {
-      return `AI Navigation Assistant: You are currently on the ${alt.name}. This corridor is ${alt.distanceKm} kilometers long, avoids all subterranean GNSS blackout zones, and maintains a continuous satellite navigation signal.`;
+    if (!isNavigating || isPaused) {
+      return `AI Navigation Assistant: Navigation is paused. Press resume when you are ready to continue.`;
     }
 
-    if (traffic.severity === 'high') {
-      return `AI Navigation Assistant: Traffic congestion is currently high at ${traffic.locationName} due to ${traffic.reason.toLowerCase()} I highly recommend switching to the ${alt.name}. It is only ${Math.round((alt.distanceKm - activeRoute.distanceKm) * 1000)} meters longer but bypasses a ${activeRoute.blackoutZones[0]?.lengthMeters || 700} meter GNSS blackout zone and saves you time.`;
+    if (isLiveDataEnabled && !hasLiveGpsFix) {
+      return `AI Navigation Assistant: I am waiting for a live GPS fix. Keep location permission enabled while I prepare your ${vehicleType} route.`;
     }
 
-    return `AI Navigation Assistant: You are navigating on the shortest path via the ${activeRoute.name}. A ${activeRoute.blackoutZones[0]?.lengthMeters || 700} meter GNSS blackout zone lies ahead inside the ${activeRoute.blackoutZones[0]?.name || 'tunnel'}. Alternative bypass route is available.`;
+    if (isBlackout) {
+      return `AI Navigation Assistant: GNSS is unavailable inside ${activeBlackoutZone?.name || 'the blackout zone'}. Intelligent dead reckoning is active. Continue ${Math.round(remainingDistanceMeters)} meters to the next maneuver.`;
+    }
+
+    if (currentManeuver?.direction === 'destination') {
+      return `AI Navigation Assistant: You are approaching your destination. ${currentManeuver.instruction}`;
+    }
+
+    if (hasConfiguredBypass && !useAlternativeRoute && traffic.severity === 'high') {
+      return `AI Navigation Assistant: Heavy traffic is reported near ${traffic.locationName}. Consider ${alt.name}, which is ${Math.round((alt.distanceKm - activeRoute.distanceKm) * 1000)} meters different and avoids the configured blackout zone.`;
+    }
+
+    const maneuverDistance = currentManeuver?.distanceMeters || remainingDistanceMeters;
+    return `AI Navigation Assistant: Continue on ${currentManeuver?.roadName || activeRoute.name}. ${currentManeuver?.instruction || 'Follow the highlighted route'} in approximately ${Math.round(maneuverDistance)} meters. You have ${Math.max(0, Math.round(remainingDistanceMeters))} meters remaining.`;
   };
 
   const handleSpeak = () => {
-    speakAssistantMessage(getAdviceText());
+    if (isAssistantSpeaking) {
+      stopAssistantMessage();
+    } else {
+      speakAssistantMessage(getAdviceText());
+    }
   };
 
-  const trafficColor =
-    traffic.severity === 'high'
+  const trafficColor = isLiveRoute
+    ? 'bg-green-100 text-govt-green border-green-200'
+    : traffic.severity === 'high'
       ? 'bg-red-100 text-govt-red border-red-200'
       : traffic.severity === 'moderate'
         ? 'bg-amber-100 text-govt-amber border-amber-200'
@@ -54,6 +106,101 @@ export default function SmartAssistant() {
 
   const [isSettingsOpen, setIsSettingsOpen] = React.useState(false);
   const [showApiKey, setShowApiKey] = React.useState(false);
+  const [isListening, setIsListening] = React.useState(false);
+  const [voiceCommandStatus, setVoiceCommandStatus] = React.useState('');
+  const [isVoiceAssistantEnabled, setIsVoiceAssistantEnabled] = React.useState(false);
+  const [commandInput, setCommandInput] = React.useState('');
+
+  const respondToVoiceCommand = (message: string) => {
+    setVoiceCommandStatus(message);
+    speakAssistantMessage(message);
+  };
+
+  const executeCommand = (command: string) => {
+    const normalizedCommand = command.trim().toLowerCase();
+    if (normalizedCommand.includes('start') || normalizedCommand.includes('begin') || normalizedCommand.includes('शुरू')) {
+      startNavigation();
+      respondToVoiceCommand('Navigation started. I will guide you along the route.');
+    } else if (normalizedCommand.includes('pause') || normalizedCommand.includes('stop') || normalizedCommand.includes('रोक')) {
+      pauseNavigation();
+      respondToVoiceCommand('Navigation paused.');
+    } else if (normalizedCommand.includes('resume') || normalizedCommand.includes('continue') || normalizedCommand.includes('जारी')) {
+      resumeNavigation();
+      respondToVoiceCommand('Navigation resumed.');
+    } else if (normalizedCommand.includes('hindi') || normalizedCommand.includes('हिंदी')) {
+      updateVoiceConfig({ language: 'hi-IN' });
+      respondToVoiceCommand('Hindi voice selected.');
+    } else if (normalizedCommand.includes('english') || normalizedCommand.includes('अंग्रेजी')) {
+      updateVoiceConfig({ language: 'en-IN' });
+      respondToVoiceCommand('English voice selected.');
+    } else if (normalizedCommand.includes('bike') || normalizedCommand.includes('motorcycle')) {
+      setVehicleType('motorcycle');
+      respondToVoiceCommand('Motorcycle selected.');
+    } else if (normalizedCommand.includes('bus')) {
+      setVehicleType('bus');
+      respondToVoiceCommand('Bus selected.');
+    } else if (normalizedCommand.includes('truck')) {
+      setVehicleType('truck');
+      respondToVoiceCommand('Truck selected.');
+    } else if (normalizedCommand.includes('car')) {
+      setVehicleType('car');
+      respondToVoiceCommand('Car selected.');
+    } else if (normalizedCommand.includes('read') || normalizedCommand.includes('status') || normalizedCommand.includes('बताओ')) {
+      speakAssistantMessage(getAdviceText());
+      setVoiceCommandStatus('Reading current navigation status.');
+    } else {
+      respondToVoiceCommand('I did not understand that. Try start navigation or read status.');
+    }
+  };
+
+  const handleVoiceCommand = () => {
+    if (!window.isSecureContext && window.location.hostname !== 'localhost') {
+      setIsVoiceAssistantEnabled(false);
+      setVoiceCommandStatus('Microphone requires HTTPS on the deployed site. Open the secure https:// address.');
+      return;
+    }
+
+    const speechWindow = window as typeof window & {
+      SpeechRecognition?: VoiceRecognitionConstructor;
+      webkitSpeechRecognition?: VoiceRecognitionConstructor;
+    };
+    const SpeechRecognition = speechWindow.SpeechRecognition || speechWindow.webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      setIsVoiceAssistantEnabled(false);
+      setVoiceCommandStatus('Voice commands are not supported in this browser.');
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.lang = voiceConfig.language;
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.onstart = () => {
+      setIsListening(true);
+      setVoiceCommandStatus('Listening...');
+    };
+    recognition.onend = () => setIsListening(false);
+    recognition.onerror = (event) => {
+      setIsListening(false);
+      setIsVoiceAssistantEnabled(false);
+      setVoiceCommandStatus(event.error === 'network'
+        ? 'Voice recognition needs an internet connection. Type a command below or try the mic again.'
+        : `Voice command failed: ${event.error}`);
+    };
+    recognition.onresult = (event) => {
+      const command = event.results[0][0].transcript.trim().toLowerCase();
+      setVoiceCommandStatus(`Heard: “${command}”`);
+      executeCommand(command);
+    };
+    try {
+      recognition.start();
+    } catch (error) {
+      setIsListening(false);
+      setIsVoiceAssistantEnabled(false);
+      setVoiceCommandStatus('Microphone could not start. Check browser microphone permission and try again.');
+    }
+  };
 
   return (
     <div className="bg-white border border-govt-border rounded-lg shadow-sm overflow-hidden text-govt-text">
@@ -66,11 +213,49 @@ export default function SmartAssistant() {
         <button
           onClick={handleSpeak}
           className="p-1 rounded bg-white/10 hover:bg-white/20 transition-colors flex items-center justify-center"
-          title="Listen to Advice"
+          title={isAssistantSpeaking ? 'Stop speaking' : 'Listen to Advice'}
+          aria-label={isAssistantSpeaking ? 'Stop speaking' : 'Listen to Advice'}
         >
-          <Volume2 className="w-3.5 h-3.5" />
+          {isAssistantSpeaking ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+        </button>
+        <button
+          onClick={() => {
+            setIsVoiceAssistantEnabled((enabled) => !enabled);
+            handleVoiceCommand();
+          }}
+          className={`ml-1 p-1 rounded transition-colors ${isListening || isVoiceAssistantEnabled ? 'bg-govt-red text-white animate-pulse' : 'bg-white/10 hover:bg-white/20'}`}
+          title={isListening ? 'Listening for a command' : 'Talk to AI Co-Driver'}
+          aria-label={isListening ? 'Listening for a command' : 'Talk to AI Co-Driver'}
+        >
+          {isListening ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
         </button>
       </div>
+
+      {voiceCommandStatus && (
+        <div className="border-b border-govt-border bg-blue-50 px-3.5 py-1.5 text-[10px] font-semibold text-blue-800">
+          <span className="mr-1">{isVoiceAssistantEnabled ? 'AI listening:' : 'AI:'}</span>{voiceCommandStatus}
+        </div>
+      )}
+
+      <form
+        className="flex gap-1.5 border-b border-govt-border bg-slate-50 px-3.5 py-1.5"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (commandInput.trim()) {
+            executeCommand(commandInput);
+            setCommandInput('');
+          }
+        }}
+      >
+        <input
+          value={commandInput}
+          onChange={(event) => setCommandInput(event.target.value)}
+          placeholder="Type a command if mic is unavailable"
+          aria-label="Assistant command"
+          className="min-w-0 flex-1 rounded border border-govt-border bg-white px-2 py-1 text-[10px] text-govt-text outline-none focus:border-navy"
+        />
+        <button type="submit" className="rounded bg-navy px-2 py-1 text-[10px] font-bold text-white">Send</button>
+      </form>
 
       {/* Voice Selection Row */}
       <div className="bg-slate-50 border-b border-govt-border px-3.5 py-2 flex flex-wrap items-center justify-between gap-2 text-xs">
@@ -78,20 +263,31 @@ export default function SmartAssistant() {
           <span>Voice:</span>
           <select
             value={voiceConfig.persona}
-            onChange={(e) => updateVoiceConfig({ persona: e.target.value as any })}
+            onChange={(e) => updateVoiceConfig({ persona: e.target.value as 'male' | 'female' })}
             className="bg-white border border-govt-border rounded px-2 py-1 text-xs focus:ring-1 focus:ring-navy focus:border-navy cursor-pointer font-medium"
           >
-            <option value="default">System Default</option>
-            <option value="amitabh">Amitabh Bachchan (Deep IN)</option>
-            <option value="morgan">Morgan Freeman (Deep US)</option>
-            <option value="jarvis">JARVIS (British Tech)</option>
-            <option value="scarlett">Scarlett Johansson (Samantha)</option>
+            <option value="male">Male</option>
+            <option value="female">Female</option>
+          </select>
+        </div>
+        <div className="flex items-center gap-1.5 font-semibold text-govt-text">
+          <span>Language:</span>
+          <select
+            value={voiceConfig.language}
+            onChange={(e) => {
+              stopAssistantMessage();
+              updateVoiceConfig({ language: e.target.value as 'en-IN' | 'hi-IN' });
+            }}
+            className="bg-white border border-govt-border rounded px-2 py-1 text-xs focus:ring-1 focus:ring-navy focus:border-navy cursor-pointer font-medium"
+          >
+            <option value="en-IN">English</option>
+            <option value="hi-IN">Hindi</option>
           </select>
         </div>
         
         <div className="flex items-center gap-1">
           <button
-            onClick={() => speakAssistantMessage("Hello, this is your AI Navigation Co-Driver. I will guide you along your route.")}
+            onClick={() => speakAssistantMessage('Hello, this is your AI Navigation Co-Driver. I will guide you along your route.')}
             className="p-1 text-navy hover:bg-navy/10 rounded transition-colors"
             title="Test current voice"
           >
@@ -254,24 +450,32 @@ export default function SmartAssistant() {
         <div className={`border rounded p-3 text-xs flex gap-2 ${trafficColor}`}>
           <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
           <div className="space-y-0.5">
-            <span className="font-bold">TRAFFIC ALERT:</span>{' '}
-            <span className="font-medium">
-              {traffic.locationName} is experiencing {traffic.severity} congestion due to {traffic.reason}
-            </span>
+            <span className="font-bold">{isLiveRoute ? 'LIVE ROUTE:' : 'TRAFFIC ALERT:'}</span>{' '}
+            <span className="font-medium">{isLiveRoute
+              ? `Following ${vehicleType} route guidance. ${currentManeuver?.instruction || 'Follow the highlighted route.'}`
+              : `${traffic.locationName} is experiencing ${traffic.severity} congestion due to ${traffic.reason}`}</span>
             <div className="flex items-center gap-3 pt-1 text-[10px] opacity-90 font-mono">
-              <span className="flex items-center gap-0.5">
-                <Clock className="w-3 h-3" /> Delay: +{Math.round(traffic.delaySeconds / 60)} mins
-              </span>
+              {isLiveRoute ? (
+                <span>Live road geometry loaded</span>
+              ) : (
+                <span className="flex items-center gap-0.5">
+                  <Clock className="w-3 h-3" /> Delay: +{Math.round(traffic.delaySeconds / 60)} mins
+                </span>
+              )}
             </div>
           </div>
         </div>
 
-        {/* Shortest vs Avoid Outage Choice Buttons */}
+        {/* Preset corridor choices only exist for the tunnel demo routes. */}
         <div className="border border-govt-border rounded-lg p-2.5 bg-gray-50 space-y-2">
           <div className="text-[10px] text-govt-muted uppercase font-bold tracking-wider">
-            Select Route Corridor
+            {isLiveRoute ? 'Live Route Status' : 'Select Route Corridor'}
           </div>
-          <div className="grid grid-cols-2 gap-2">
+          {isLiveRoute ? (
+            <div className="text-xs font-semibold text-govt-text">
+              {currentManeuver?.roadName || 'Road route'}<span className="text-govt-muted font-normal"> · {Math.max(0, Math.round(remainingDistanceMeters))} m remaining</span>
+            </div>
+          ) : <div className="grid grid-cols-2 gap-2">
             <button
               onClick={() => {
                 if (useAlternativeRoute) toggleRouteVariant();
@@ -309,7 +513,7 @@ export default function SmartAssistant() {
                 ✓ Continuous GPS Coverage
               </div>
             </button>
-          </div>
+          </div>}
         </div>
 
         {/* Assistant Advice Explanation */}
@@ -324,7 +528,8 @@ export default function SmartAssistant() {
               onClick={handleSpeak}
               className="mt-2 text-[10px] text-navy font-bold hover:underline flex items-center gap-1"
             >
-              <Volume2 className="w-3 h-3" /> Listen to Audio Announcement
+              {isAssistantSpeaking ? <VolumeX className="w-3 h-3" /> : <Volume2 className="w-3 h-3" />}
+              {isAssistantSpeaking ? 'Stop Audio Announcement' : 'Listen to Audio Announcement'}
             </button>
           </div>
         </div>

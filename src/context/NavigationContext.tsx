@@ -52,10 +52,34 @@ function generateSensorReading(base: number, noiseScale: number): SensorReading 
   };
 }
 
-export type VoicePersona = 'default' | 'amitabh' | 'morgan' | 'jarvis' | 'scarlett';
+const translationCache = new Map<string, string>();
+
+async function translateToHindi(text: string): Promise<string> {
+  const cached = translationCache.get(text);
+  if (cached) return cached;
+
+  try {
+    const response = await fetch(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=hi&dt=t&q=${encodeURIComponent(text)}`);
+    if (!response.ok) throw new Error('Translation request failed');
+    const result = await response.json() as [Array<[string, string]>];
+    const translated = result[0].map((part) => part[0]).join('');
+    if (translated) {
+      translationCache.set(text, translated);
+      return translated;
+    }
+  } catch (error) {
+    console.warn('Hindi translation unavailable, using the original message:', error);
+  }
+  return text;
+}
+
+export type VoicePersona = 'male' | 'female';
+export type VoiceLanguage = 'en-IN' | 'hi-IN';
+export type VehicleType = 'car' | 'motorcycle' | 'bus' | 'truck';
 
 export interface VoiceConfig {
   persona: VoicePersona;
+  language: VoiceLanguage;
   useElevenLabs: boolean;
   elevenLabsApiKey: string;
   elevenLabsVoiceIds: {
@@ -70,6 +94,10 @@ export interface VoiceConfig {
 interface NavContextValue extends NavigationState {
   availableRoutes: NavigationRoute[];
   selectRoute: (routeId: string) => void;
+  loadRoute: (route: NavigationRoute) => void;
+  vehicleType: VehicleType;
+  setVehicleType: (vehicleType: VehicleType) => void;
+  isNetworkOnline: boolean;
   startNavigation: () => void;
   pauseNavigation: () => void;
   resumeNavigation: () => void;
@@ -83,6 +111,13 @@ interface NavContextValue extends NavigationState {
   voiceConfig: VoiceConfig;
   updateVoiceConfig: (config: Partial<VoiceConfig>) => void;
   speakAssistantMessage: (text: string) => void;
+  stopAssistantMessage: () => void;
+  isAssistantSpeaking: boolean;
+  isLiveDataEnabled: boolean;
+  hasLiveGpsFix: boolean;
+  liveDataError: string | null;
+  enableLiveData: () => void;
+  disableLiveData: () => void;
 }
 
 const NavigationContext = createContext<NavContextValue | null>(null);
@@ -94,16 +129,27 @@ export function useNavigation(): NavContextValue {
 }
 
 export function NavigationProvider({ children }: { children: React.ReactNode }) {
-  const [activeRoute, setActiveRoute] = useState<NavigationRoute>(VIJAYAWADA_ROUTE);
+  const [activeRoute, setActiveRoute] = useState<NavigationRoute>(() => {
+    const cachedRoute = localStorage.getItem('idr-nav-last-route');
+    if (cachedRoute) {
+      try {
+        return JSON.parse(cachedRoute) as NavigationRoute;
+      } catch {
+        localStorage.removeItem('idr-nav-last-route');
+      }
+    }
+    return VIJAYAWADA_ROUTE;
+  });
   const [routeIndex, setRouteIndex] = useState(0);
   const [isNavigating, setIsNavigating] = useState(true);
   const [isPaused, setIsPaused] = useState(false);
   const [autoBlackoutEnabled, setAutoBlackoutEnabled] = useState(true);
   const [useAlternativeRoute, setUseAlternativeRoute] = useState(false);
+  const [vehicleType, setVehicleType] = useState<VehicleType>('car');
 
   const [gnssStatus, setGnssStatus] = useState<GNSSStatus>('healthy');
   const [navigationMode, setNavigationMode] = useState<NavigationMode>('GNSS + INS Fusion');
-  const [position, setPosition] = useState<Position>(VIJAYAWADA_ROUTE.waypoints[0]);
+  const [position, setPosition] = useState<Position>(() => activeRoute.waypoints[0]);
   const [speed, setSpeed] = useState(48);
   const [heading, setHeading] = useState(62);
   const [headingLabel, setHeadingLabel] = useState('North-East');
@@ -114,7 +160,7 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
   const [isBlackout, setIsBlackout] = useState(false);
   const [systemMessage, setSystemMessage] = useState('System active. GNSS + INS Fusion engaged.');
 
-  const [gnssTrajectory, setGnssTrajectory] = useState<Position[]>([VIJAYAWADA_ROUTE.waypoints[0]]);
+  const [gnssTrajectory, setGnssTrajectory] = useState<Position[]>(() => [activeRoute.waypoints[0]]);
   const [drTrajectory, setDrTrajectory] = useState<Position[]>([]);
   const [blackoutSegment, setBlackoutSegment] = useState<Position[]>([]);
   const [accelerometer, setAccelerometer] = useState<SensorReading[]>([]);
@@ -122,9 +168,9 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
   const [motionState, setMotionState] = useState<MotionState>('Moving');
   const [motionConfidence, setMotionConfidence] = useState(94);
 
-  const [currentManeuver, setCurrentManeuver] = useState<Maneuver | null>(VIJAYAWADA_ROUTE.maneuvers[0]);
-  const [distanceToNextManeuver, setDistanceToNextManeuver] = useState(550);
-  const [remainingDistanceMeters, setRemainingDistanceMeters] = useState(3400);
+  const [currentManeuver, setCurrentManeuver] = useState<Maneuver | null>(() => activeRoute.maneuvers[0] || null);
+  const [distanceToNextManeuver, setDistanceToNextManeuver] = useState(() => activeRoute.maneuvers[0]?.distanceMeters || 0);
+  const [remainingDistanceMeters, setRemainingDistanceMeters] = useState(() => activeRoute.distanceKm * 1000);
   const [activeBlackoutZone, setActiveBlackoutZone] = useState<BlackoutZone | null>(null);
 
   const blackoutDistRef = useRef(0);
@@ -132,18 +178,33 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
   const recoveryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const elevenLabsAudioRef = useRef<HTMLAudioElement | null>(null);
+  const speechTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const speechRequestRef = useRef(0);
+  const [isAssistantSpeaking, setIsAssistantSpeaking] = useState(false);
+  const [isLiveDataEnabled, setIsLiveDataEnabled] = useState(false);
+  const [hasLiveGpsFix, setHasLiveGpsFix] = useState(false);
+  const [liveDataError, setLiveDataError] = useState<string | null>(null);
+  const [isNetworkOnline, setIsNetworkOnline] = useState(() => navigator.onLine);
+  const geolocationWatchRef = useRef<number | null>(null);
+  const lastLivePositionRef = useRef<Position | null>(null);
 
   const [voiceConfig, setVoiceConfig] = useState<VoiceConfig>(() => {
     const saved = localStorage.getItem('sih_voice_config');
     if (saved) {
       try {
-        return JSON.parse(saved);
+        const savedConfig = JSON.parse(saved);
+        return {
+          ...savedConfig,
+          persona: savedConfig.persona === 'female' ? 'female' : 'male',
+          language: savedConfig.language === 'hi-IN' ? 'hi-IN' : 'en-IN',
+        };
       } catch (e) {
         console.error('Failed to parse saved voice config', e);
       }
     }
     return {
-      persona: 'default',
+      persona: 'male',
+      language: 'en-IN',
       useElevenLabs: false,
       elevenLabsApiKey: '',
       elevenLabsVoiceIds: {
@@ -159,6 +220,17 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
   useEffect(() => {
     localStorage.setItem('sih_voice_config', JSON.stringify(voiceConfig));
   }, [voiceConfig]);
+
+  useEffect(() => {
+    const handleOnline = () => setIsNetworkOnline(true);
+    const handleOffline = () => setIsNetworkOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
 
   // Pre-load voices on load
   useEffect(() => {
@@ -217,34 +289,23 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
     }
   }, []);
 
-  const speakNativeSpeech = useCallback((text: string, persona: VoicePersona) => {
+  const speakNativeSpeech = useCallback((text: string, persona: VoicePersona, language: VoiceLanguage, onEnd?: () => void) => {
     if (!('speechSynthesis' in window)) return;
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = language;
     
     let pitch = 1.0;
     let rate = 0.95;
     
     switch (persona) {
-      case 'amitabh':
-        pitch = 0.78;
-        rate = 0.88;
-        break;
-      case 'morgan':
+      case 'male':
         pitch = 0.75;
         rate = 0.80;
         break;
-      case 'jarvis':
-        pitch = 1.05;
-        rate = 0.98;
-        break;
-      case 'scarlett':
+      case 'female':
         pitch = 0.95;
         rate = 0.90;
-        break;
-      default:
-        pitch = 1.0;
-        rate = 0.95;
         break;
     }
     
@@ -254,33 +315,27 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
     const voices = window.speechSynthesis.getVoices();
     if (voices.length > 0) {
       let matchedVoice = null;
-      if (persona === 'amitabh') {
-        matchedVoice = voices.find(v => v.lang.includes('IN') && v.name.toLowerCase().includes('male')) ||
-                       voices.find(v => v.lang.includes('IN')) ||
-                       voices.find(v => v.lang.includes('hi')) ||
-                       voices.find(v => v.lang.includes('en'));
-      } else if (persona === 'jarvis') {
-        matchedVoice = voices.find(v => v.lang.includes('GB') && v.name.toLowerCase().includes('male')) ||
-                       voices.find(v => v.lang.includes('GB')) ||
-                       voices.find(v => v.lang.includes('en'));
-      } else if (persona === 'morgan') {
-        matchedVoice = voices.find(v => v.lang.includes('US') && v.name.toLowerCase().includes('male')) ||
-                       voices.find(v => v.lang.includes('US')) ||
-                       voices.find(v => v.lang.includes('en'));
-      } else if (persona === 'scarlett') {
-        matchedVoice = voices.find(v => v.lang.includes('US') && v.name.toLowerCase().includes('female')) ||
-                       voices.find(v => (v.name.toLowerCase().includes('samantha') || v.name.toLowerCase().includes('zira') || v.name.toLowerCase().includes('victoria'))) ||
-                       voices.find(v => v.lang.includes('US')) ||
-                       voices.find(v => v.lang.includes('en'));
+      const languagePrefix = language.slice(0, 2).toLowerCase();
+      const hasLanguage = (voice: SpeechSynthesisVoice) => voice.lang.toLowerCase().replace('_', '-').startsWith(languagePrefix);
+      if (persona === 'male') {
+        matchedVoice = voices.find(v => hasLanguage(v) && v.name.toLowerCase().match(/male|daniel|alex|david|fred|jorge/)) ||
+                       voices.find(v => hasLanguage(v));
+      } else {
+        matchedVoice = voices.find(v => hasLanguage(v) && v.name.toLowerCase().match(/female|samantha|zira|victoria/)) ||
+                       voices.find(v => hasLanguage(v));
       }
       if (matchedVoice) {
         utterance.voice = matchedVoice;
       }
     }
+    if (onEnd) {
+      utterance.onend = onEnd;
+      utterance.onerror = onEnd;
+    }
     window.speechSynthesis.speak(utterance);
   }, []);
 
-  const speakElevenLabs = useCallback(async (text: string, voiceId: string, apiKey: string) => {
+  const speakElevenLabs = useCallback(async (text: string, voiceId: string, apiKey: string, requestId: number) => {
     try {
       if ('speechSynthesis' in window) {
         window.speechSynthesis.cancel();
@@ -313,31 +368,65 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
       const audioUrl = URL.createObjectURL(blob);
       const audio = new Audio(audioUrl);
       elevenLabsAudioRef.current = audio;
+      if (requestId !== speechRequestRef.current) {
+        URL.revokeObjectURL(audioUrl);
+        return;
+      }
+      audio.onended = () => {
+        URL.revokeObjectURL(audioUrl);
+        setIsAssistantSpeaking(false);
+      };
       await audio.play();
     } catch (err) {
+      if (requestId !== speechRequestRef.current) return;
       console.error('ElevenLabs synthesis failed, falling back to native browser voice:', err);
-      speakNativeSpeech(text, voiceConfig.persona);
+      speakNativeSpeech(text, voiceConfig.persona, voiceConfig.language, () => setIsAssistantSpeaking(false));
     }
-  }, [voiceConfig.persona, speakNativeSpeech]);
+  }, [voiceConfig.persona, voiceConfig.language, speakNativeSpeech]);
+
+  const stopAssistantMessage = useCallback(() => {
+    speechRequestRef.current += 1;
+    if (speechTimeoutRef.current) {
+      clearTimeout(speechTimeoutRef.current);
+      speechTimeoutRef.current = null;
+    }
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
+    if (elevenLabsAudioRef.current) {
+      elevenLabsAudioRef.current.pause();
+      elevenLabsAudioRef.current.currentTime = 0;
+      elevenLabsAudioRef.current = null;
+    }
+    setIsAssistantSpeaking(false);
+  }, []);
 
   const speakAssistantMessage = useCallback((text: string) => {
+    stopAssistantMessage();
+    const requestId = speechRequestRef.current;
+    setIsAssistantSpeaking(true);
     if (voiceConfig.playChime) {
       playChime();
     }
     const speakDelay = voiceConfig.playChime ? 350 : 0;
-    setTimeout(() => {
-      if (voiceConfig.useElevenLabs && voiceConfig.elevenLabsApiKey) {
-        const voiceId = voiceConfig.elevenLabsVoiceIds[voiceConfig.persona as keyof typeof voiceConfig.elevenLabsVoiceIds] || voiceConfig.elevenLabsVoiceIds.morgan;
-        speakElevenLabs(text, voiceId, voiceConfig.elevenLabsApiKey);
+    speechTimeoutRef.current = setTimeout(async () => {
+      speechTimeoutRef.current = null;
+      const speechText = voiceConfig.language === 'hi-IN' ? await translateToHindi(text) : text;
+      if (requestId !== speechRequestRef.current) return;
+      if (voiceConfig.useElevenLabs && voiceConfig.elevenLabsApiKey && voiceConfig.language === 'en-IN') {
+        const voiceId = voiceConfig.persona === 'female'
+          ? voiceConfig.elevenLabsVoiceIds.scarlett
+          : voiceConfig.elevenLabsVoiceIds.morgan;
+        speakElevenLabs(speechText, voiceId, voiceConfig.elevenLabsApiKey, requestId);
       } else {
-        speakNativeSpeech(text, voiceConfig.persona);
+        speakNativeSpeech(speechText, voiceConfig.persona, voiceConfig.language, () => setIsAssistantSpeaking(false));
       }
     }, speakDelay);
-  }, [voiceConfig, playChime, speakElevenLabs, speakNativeSpeech]);
+  }, [voiceConfig, playChime, speakElevenLabs, speakNativeSpeech, stopAssistantMessage]);
 
   // Switch Route Function
-  const selectRoute = useCallback((routeId: string) => {
-    const route = PRESET_ROUTES.find((r) => r.id === routeId) || VIJAYAWADA_ROUTE;
+  const loadRoute = useCallback((route: NavigationRoute) => {
+    localStorage.setItem('idr-nav-last-route', JSON.stringify(route));
     setActiveRoute(route);
     setUseAlternativeRoute(false); // Reset to shortest path
     setRouteIndex(0);
@@ -359,6 +448,10 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
     setIsPaused(false);
     setIsNavigating(true);
   }, []);
+
+  const selectRoute = useCallback((routeId: string) => {
+    loadRoute(PRESET_ROUTES.find((r) => r.id === routeId) || VIJAYAWADA_ROUTE);
+  }, [loadRoute]);
 
   // Toggle variant
   const toggleRouteVariant = useCallback(() => {
@@ -427,9 +520,121 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
     }, 2800);
   }, []);
 
+  const disableLiveData = useCallback(() => {
+    if (geolocationWatchRef.current !== null) {
+      navigator.geolocation.clearWatch(geolocationWatchRef.current);
+      geolocationWatchRef.current = null;
+    }
+    setIsLiveDataEnabled(false);
+    setHasLiveGpsFix(false);
+    setLiveDataError(null);
+  }, []);
+
+  const enableLiveData = useCallback(async () => {
+    if (!('geolocation' in navigator)) {
+      setLiveDataError('Live GPS is not available in this browser.');
+      return;
+    }
+
+    if (geolocationWatchRef.current !== null) {
+      return;
+    }
+
+    setLiveDataError(null);
+    setHasLiveGpsFix(false);
+    setIsLiveDataEnabled(true);
+    setIsNavigating(false);
+    setIsPaused(false);
+    setSystemMessage('Waiting for live GPS location permission...');
+
+    const motionPermission = (window.DeviceMotionEvent as typeof DeviceMotionEvent & {
+      requestPermission?: () => Promise<'granted' | 'denied'>;
+    }).requestPermission;
+    if (motionPermission) {
+      try {
+        await motionPermission();
+      } catch {
+        setLiveDataError('GPS is active. Motion sensors were not permitted.');
+      }
+    }
+
+    geolocationWatchRef.current = navigator.geolocation.watchPosition(
+      (location) => {
+        const nextPosition = { lat: location.coords.latitude, lng: location.coords.longitude };
+        const previousPosition = lastLivePositionRef.current;
+        const measuredDistance = previousPosition ? distanceBetween(previousPosition, nextPosition) : 0;
+        const measuredHeading = location.coords.heading ?? (previousPosition ? getHeading(previousPosition, nextPosition) : heading);
+        const measuredSpeed = location.coords.speed === null ? speed : Math.max(0, location.coords.speed * 3.6);
+
+        setHasLiveGpsFix(true);
+        setPosition(nextPosition);
+        setHeading(Math.round(measuredHeading));
+        setHeadingLabel(getHeadingLabel(measuredHeading));
+        setSpeed(Math.round(measuredSpeed));
+        setPositionConfidence(Math.max(0, Math.min(100, 100 - (location.coords.accuracy / 2))));
+        setGnssStatus('healthy');
+        setNavigationMode('GNSS + INS Fusion');
+        setSystemMessage(`Live GPS active. Accuracy ±${Math.round(location.coords.accuracy)} m.`);
+        setGnssTrajectory((trajectory) => [...trajectory.slice(-120), nextPosition]);
+        setRemainingDistanceMeters((remaining) => Math.max(0, remaining - Math.round(measuredDistance)));
+        lastLivePositionRef.current = nextPosition;
+      },
+      (error) => {
+        if (!navigator.onLine) {
+          setLiveDataError('Internet disconnected. Continuing with the current GPS/navigation data.');
+          return;
+        }
+        const message = error.code === error.PERMISSION_DENIED
+          ? 'Location permission was denied. Allow location access in browser settings.'
+          : error.code === error.POSITION_UNAVAILABLE
+            ? 'GPS position is unavailable. Use a phone outdoors or enable location services.'
+            : 'GPS request timed out. Move to an open area and try again.';
+        setLiveDataError(message);
+        setSystemMessage(message);
+        setIsLiveDataEnabled(false);
+        setHasLiveGpsFix(false);
+        if (geolocationWatchRef.current !== null) {
+          navigator.geolocation.clearWatch(geolocationWatchRef.current);
+          geolocationWatchRef.current = null;
+        }
+      },
+      { enableHighAccuracy: true, maximumAge: 1000, timeout: 10000 }
+    );
+  }, [heading, speed]);
+
+  useEffect(() => {
+    if (!isLiveDataEnabled || !('DeviceMotionEvent' in window)) return;
+
+    const handleDeviceMotion = (event: DeviceMotionEvent) => {
+      const acceleration = event.accelerationIncludingGravity;
+      const rotation = event.rotationRate;
+      if (acceleration) {
+        setAccelerometer((previous) => [...previous.slice(-60), {
+          x: acceleration.x ?? 0,
+          y: acceleration.y ?? 0,
+          z: acceleration.z ?? 0,
+          timestamp: Date.now(),
+        }]);
+      }
+      if (rotation) {
+        setGyroscope((previous) => [...previous.slice(-60), {
+          x: rotation.alpha ?? 0,
+          y: rotation.beta ?? 0,
+          z: rotation.gamma ?? 0,
+          timestamp: Date.now(),
+        }]);
+      }
+    };
+
+    window.addEventListener('devicemotion', handleDeviceMotion);
+    return () => window.removeEventListener('devicemotion', handleDeviceMotion);
+  }, [isLiveDataEnabled]);
+
+  useEffect(() => () => disableLiveData(), [disableLiveData]);
+
   // Main Vehicle Route Loop
   useEffect(() => {
-    if (!isNavigating || isPaused) return;
+    if (!isNavigating || isPaused || isLiveDataEnabled) return;
 
     const interval = setInterval(() => {
       setRouteIndex((prev) => {
@@ -532,12 +737,12 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
     }, 750);
 
     return () => clearInterval(interval);
-  }, [isNavigating, isPaused, activeRoute, isBlackout, gnssStatus, autoBlackoutEnabled, restoreGNSS, useAlternativeRoute]);
+  }, [isNavigating, isPaused, isLiveDataEnabled, activeRoute, isBlackout, gnssStatus, autoBlackoutEnabled, restoreGNSS, useAlternativeRoute]);
 
   const startNavigation = useCallback(() => {
     setIsNavigating(true);
     setIsPaused(false);
-    setSystemMessage(`Navigating along ${activeRoute.name}`);
+    setSystemMessage(`Navigation started along ${activeRoute.name}.`);
   }, [activeRoute]);
 
   const pauseNavigation = useCallback(() => {
@@ -595,6 +800,10 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
     availableRoutes: PRESET_ROUTES,
     useAlternativeRoute,
     selectRoute,
+    loadRoute,
+    vehicleType,
+    setVehicleType,
+    isNetworkOnline,
     startNavigation,
     pauseNavigation,
     resumeNavigation,
@@ -607,6 +816,13 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
     voiceConfig,
     updateVoiceConfig,
     speakAssistantMessage,
+    stopAssistantMessage,
+    isAssistantSpeaking,
+    isLiveDataEnabled,
+    hasLiveGpsFix,
+    liveDataError,
+    enableLiveData,
+    disableLiveData,
   };
 
   return <NavigationContext.Provider value={value}>{children}</NavigationContext.Provider>;

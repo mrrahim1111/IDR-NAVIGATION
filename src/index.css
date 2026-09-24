@@ -22,6 +22,49 @@ body {
   background: #f3f4f6;
 }
 
+html.dark body {
+  background: #111827;
+}
+
+html.dark .bg-white,
+html.dark .bg-white\/90,
+html.dark .bg-white\/95 {
+  background-color: #1f2937 !important;
+}
+
+html.dark .bg-gray-50,
+html.dark .bg-slate-50,
+html.dark .bg-slate-100,
+html.dark .bg-govt-grey,
+html.dark .bg-govt-grey\/50,
+html.dark .bg-govt-grey\/80 {
+  background-color: #273449 !important;
+}
+
+html.dark .text-govt-text,
+html.dark .text-gray-700,
+html.dark .text-gray-800 {
+  color: #e5e7eb !important;
+}
+
+html.dark .text-govt-muted,
+html.dark .text-gray-400,
+html.dark .text-gray-500 {
+  color: #aeb8c7 !important;
+}
+
+html.dark .border-govt-border,
+html.dark .border-gray-300,
+html.dark .border-slate-200 {
+  border-color: #46556b !important;
+}
+
+html.dark input,
+html.dark select {
+  color: #e5e7eb;
+  background-color: #1f2937;
+}
+
 /* Leaflet overrides */
 .leaflet-container {
   width: 100%;

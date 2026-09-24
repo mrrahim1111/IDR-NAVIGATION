@@ -8,7 +8,10 @@ import {
   Info,
   Settings,
   Wifi,
+  Moon,
+  Sun,
 } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { useNavigation } from '../context/NavigationContext';
 
 const NAV_ITEMS = [
@@ -57,6 +60,13 @@ function StatusBadge() {
 }
 
 export default function Layout() {
+  const [isDarkMode, setIsDarkMode] = useState(() => localStorage.getItem('idr-nav-theme') === 'dark');
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', isDarkMode);
+    localStorage.setItem('idr-nav-theme', isDarkMode ? 'dark' : 'light');
+  }, [isDarkMode]);
+
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
@@ -85,9 +95,15 @@ export default function Layout() {
           <div className="hidden sm:flex items-center gap-1 text-gray-400">
             <Wifi className="w-4 h-4" />
           </div>
-          <button className="text-gray-400 hover:text-white transition-colors">
-            <Settings className="w-4 h-4" />
+          <button
+            onClick={() => setIsDarkMode((current) => !current)}
+            className="text-gray-400 hover:text-white transition-colors"
+            title={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+            aria-label={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+          >
+            {isDarkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
           </button>
+          <Settings className="w-4 h-4 text-gray-400" />
         </div>
       </header>
 

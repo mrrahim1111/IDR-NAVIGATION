@@ -77,6 +77,12 @@ export interface NavigationRoute {
   alternative: AlternativeRoute;
 }
 
+export interface GeocodedLocation {
+  displayName: string;
+  lat: number;
+  lng: number;
+}
+
 export interface NavigationState {
   gnssStatus: GNSSStatus;
   navigationMode: NavigationMode;

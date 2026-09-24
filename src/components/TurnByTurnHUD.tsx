@@ -15,7 +15,15 @@ import {
 } from 'lucide-react';
 import { useNavigation } from '../context/NavigationContext';
 
-export default function TurnByTurnHUD({ onOpenRouteSelector }: { onOpenRouteSelector: () => void }) {
+function distanceMeters(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
+  const latitude = ((b.lat - a.lat) * Math.PI) / 180;
+  const longitude = ((b.lng - a.lng) * Math.PI) / 180;
+  const value = Math.sin(latitude / 2) ** 2
+    + Math.cos((a.lat * Math.PI) / 180) * Math.cos((b.lat * Math.PI) / 180) * Math.sin(longitude / 2) ** 2;
+  return 6371000 * 2 * Math.atan2(Math.sqrt(value), Math.sqrt(1 - value));
+}
+
+export default function TurnByTurnHUD() {
   const {
     activeRoute,
     currentManeuver,
@@ -27,6 +35,10 @@ export default function TurnByTurnHUD({ onOpenRouteSelector }: { onOpenRouteSele
     pauseNavigation,
     resumeNavigation,
     resetSimulation,
+    position,
+    isLiveDataEnabled,
+    hasLiveGpsFix,
+    useAlternativeRoute,
   } = useNavigation();
 
   const getManeuverIcon = () => {
@@ -50,9 +62,23 @@ export default function TurnByTurnHUD({ onOpenRouteSelector }: { onOpenRouteSele
   };
 
   const etaMinutes = Math.max(1, Math.round(remainingDistanceMeters / 1000 / 0.7));
+  const routePoints = useAlternativeRoute ? activeRoute.alternative.waypoints : activeRoute.waypoints;
+  const nearestRouteDistance = Math.min(...routePoints.map((point) => distanceMeters(position, point)));
+  const routeStatus = !isLiveDataEnabled
+    ? 'DEMO LIVE'
+    : !hasLiveGpsFix
+      ? 'WAITING FOR GPS'
+      : nearestRouteDistance <= 150
+        ? 'ON ROUTE'
+        : 'OFF ROUTE';
+  const routeStatusClass = routeStatus === 'ON ROUTE' || routeStatus === 'DEMO LIVE'
+    ? 'text-govt-green'
+    : routeStatus === 'OFF ROUTE'
+      ? 'text-govt-red'
+      : 'text-govt-amber';
 
   return (
-    <div className="absolute top-3 left-3 right-3 sm:right-auto sm:max-w-md z-[1000] flex flex-col gap-2">
+    <div className="absolute top-28 left-3 right-3 sm:right-auto sm:max-w-md z-[1000] flex flex-col gap-2">
       {/* Top Turn Guidance Box */}
       <div className="bg-navy text-white rounded-lg shadow-lg overflow-hidden border border-navy-light/40">
         <div className="p-3 sm:p-3.5 flex items-center justify-between gap-3">
@@ -73,18 +99,12 @@ export default function TurnByTurnHUD({ onOpenRouteSelector }: { onOpenRouteSele
             </div>
           </div>
 
-          {/* Route Change Button */}
-          <button
-            onClick={onOpenRouteSelector}
-            className="px-2.5 py-1.5 rounded bg-white/15 hover:bg-white/25 text-[11px] font-semibold transition-colors shrink-0 flex items-center gap-1"
-          >
-            Change Route
-          </button>
         </div>
 
         {/* Status Strip */}
         <div className="bg-navy-dark px-3 py-1.5 flex items-center justify-between text-[11px] border-t border-white/10 text-gray-300">
           <div className="flex items-center gap-3">
+            <span className={`font-bold text-[10px] ${routeStatusClass}`}>{routeStatus}</span>
             <span className="font-mono font-bold text-white">
               {(remainingDistanceMeters / 1000).toFixed(1)} km left
             </span>
