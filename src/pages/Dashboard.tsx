@@ -137,7 +137,7 @@ function MapLayerToggle({
   onChange: (satellite: boolean) => void;
 }) {
   return (
-    <div className="absolute top-3 left-3 z-[1000] flex items-center gap-1 rounded-lg bg-white/95 p-1 shadow-md border border-govt-border">
+    <div className="absolute top-3 left-3 z-[1020] flex items-center gap-1 rounded-lg bg-white/95 p-1 shadow-md border border-govt-border">
       <Layers className="w-3.5 h-3.5 text-govt-muted ml-1" />
       <button
         type="button"
