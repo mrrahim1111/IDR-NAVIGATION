@@ -54,6 +54,16 @@ function generateSensorReading(base: number, noiseScale: number): SensorReading 
 
 const translationCache = new Map<string, string>();
 
+function normalizeSpeechText(text: string): string {
+  return text
+    .replace(/^AI Navigation Assistant:\s*/i, '')
+    .replace(/(\d+(?:\.\d+)?)\s*km\b/gi, '$1 kilometers')
+    .replace(/(\d+(?:\.\d+)?)\s*m\b/gi, '$1 meters')
+    .replace(/\s*:\s*/g, '. ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 async function translateToHindi(text: string): Promise<string> {
   const cached = translationCache.get(text);
   if (cached) return cached;
@@ -404,6 +414,7 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
   const speakAssistantMessage = useCallback((text: string) => {
     stopAssistantMessage();
     const requestId = speechRequestRef.current;
+    const normalizedText = normalizeSpeechText(text);
     setIsAssistantSpeaking(true);
     if (voiceConfig.playChime) {
       playChime();
@@ -411,7 +422,7 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
     const speakDelay = voiceConfig.playChime ? 350 : 0;
     speechTimeoutRef.current = setTimeout(async () => {
       speechTimeoutRef.current = null;
-      const speechText = voiceConfig.language === 'hi-IN' ? await translateToHindi(text) : text;
+      const speechText = voiceConfig.language === 'hi-IN' ? await translateToHindi(normalizedText) : normalizedText;
       if (requestId !== speechRequestRef.current) return;
       if (voiceConfig.useElevenLabs && voiceConfig.elevenLabsApiKey && voiceConfig.language === 'en-IN') {
         const voiceId = voiceConfig.persona === 'female'
